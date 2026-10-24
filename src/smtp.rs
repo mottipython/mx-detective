@@ -512,7 +512,29 @@ impl SmtpProber {
         (report, tls_report, checks)
     }
 
-    fn parse_ehlo_extensions(
+    pub fn extract_ehlo_capability(line: &str) -> &str {
+        let b = line.as_bytes();
+        if b.len() >= 4 && b[0].is_ascii_digit() && b[1].is_ascii_digit() && b[2].is_ascii_digit() && (b[3] == b'-' || b[3] == b' ') {
+            line[4..].trim()
+        } else if b.len() == 3 && b[0].is_ascii_digit() && b[1].is_ascii_digit() && b[2].is_ascii_digit() {
+            ""
+        } else {
+            line.trim()
+        }
+    }
+
+    pub fn parse_smtp_status_code(line: &str) -> Option<(u16, bool)> {
+        let b = line.as_bytes();
+        if b.len() >= 3 && b[0].is_ascii_digit() && b[1].is_ascii_digit() && b[2].is_ascii_digit() {
+            let code = ((b[0] - b'0') as u16) * 100 + ((b[1] - b'0') as u16) * 10 + ((b[2] - b'0') as u16);
+            let is_final = b.len() == 3 || b[3] == b' ';
+            Some((code, is_final))
+        } else {
+            None
+        }
+    }
+
+    pub fn parse_ehlo_extensions(
         &self,
         lines: &[String],
         report: &mut SmtpReport,
@@ -520,7 +542,8 @@ impl SmtpProber {
         post_tls: bool,
     ) {
         for line in lines.iter().skip(1) {
-            let cap = line.trim().to_uppercase();
+            let cap_str = Self::extract_ehlo_capability(line);
+            let cap = cap_str.to_uppercase();
             if cap.is_empty() {
                 continue;
             }
@@ -871,12 +894,9 @@ impl SmtpProber {
             Self::log_transcript(report, "<-", &trimmed);
             lines.push(trimmed.clone());
 
-            if trimmed.len() >= 3 {
-                if let Ok(code) = trimmed[0..3].parse::<u16>() {
-                    // In RFC 5321: multiline line format: "250-line" (dash = continue), "250 line" (space = last line)
-                    if trimmed.len() == 3 || trimmed.chars().nth(3) == Some(' ') {
-                        return Ok((code, lines, all_crlf_valid));
-                    }
+            if let Some((code, is_final)) = Self::parse_smtp_status_code(&trimmed) {
+                if is_final {
+                    return Ok((code, lines, all_crlf_valid));
                 }
             }
         }
@@ -913,11 +933,9 @@ impl SmtpProber {
             Self::log_transcript(report, "<-", &trimmed);
             lines.push(trimmed.clone());
 
-            if trimmed.len() >= 3 {
-                if let Ok(code) = trimmed[0..3].parse::<u16>() {
-                    if trimmed.len() == 3 || trimmed.chars().nth(3) == Some(' ') {
-                        return Ok((code, lines, all_crlf_valid));
-                    }
+            if let Some((code, is_final)) = Self::parse_smtp_status_code(&trimmed) {
+                if is_final {
+                    return Ok((code, lines, all_crlf_valid));
                 }
             }
         }

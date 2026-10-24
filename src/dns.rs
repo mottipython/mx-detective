@@ -290,9 +290,20 @@ impl DnsResolver {
         }
     }
 
+    pub fn parse_spf_mechanisms(raw_spf: &str) -> Vec<String> {
+        raw_spf
+            .split_whitespace()
+            .skip(1)
+            .map(|s| s.to_string())
+            .collect()
+    }
+
     fn check_spf(&self, domain: &str, report: &mut DnsReport, checks: &mut Vec<CheckItem>) {
         if let Ok(txts) = self.query_txt(domain) {
-            let spf_records: Vec<String> = txts.into_iter().filter(|t| t.starts_with("v=spf1")).collect();
+            let spf_records: Vec<String> = txts
+                .into_iter()
+                .filter(|t| t.trim().to_ascii_lowercase().starts_with("v=spf1"))
+                .collect();
 
             if spf_records.is_empty() {
                 checks.push(CheckItem {
@@ -323,8 +334,7 @@ impl DnsResolver {
             let raw_spf = &spf_records[0];
             report.spf_record = Some(raw_spf.clone());
 
-            let tokens: Vec<&str> = raw_spf.split_whitespace().collect();
-            let mechanisms: Vec<String> = tokens.iter().skip(1).map(|&s| s.to_string()).collect();
+            let mechanisms = Self::parse_spf_mechanisms(raw_spf);
             report.spf_mechanisms = mechanisms.clone();
 
             let mut lookups = 0;
@@ -426,10 +436,24 @@ impl DnsResolver {
         }
     }
 
+    pub fn parse_dmarc_tags(raw_dmarc: &str) -> HashMap<String, String> {
+        let mut tags = HashMap::new();
+        for part in raw_dmarc.split(';') {
+            let trimmed = part.trim();
+            if let Some((k, v)) = trimmed.split_once('=') {
+                tags.insert(k.trim().to_lowercase(), v.trim().to_string());
+            }
+        }
+        tags
+    }
+
     fn check_dmarc(&self, domain: &str, report: &mut DnsReport, checks: &mut Vec<CheckItem>) {
         let dmarc_host = format!("_dmarc.{}", domain);
         if let Ok(txts) = self.query_txt(&dmarc_host) {
-            let dmarc_records: Vec<String> = txts.into_iter().filter(|t| t.starts_with("v=DMARC1")).collect();
+            let dmarc_records: Vec<String> = txts
+                .into_iter()
+                .filter(|t| t.trim().to_ascii_uppercase().starts_with("V=DMARC1"))
+                .collect();
 
             if dmarc_records.is_empty() {
                 checks.push(CheckItem {
@@ -447,13 +471,7 @@ impl DnsResolver {
             let raw_dmarc = &dmarc_records[0];
             report.dmarc_record = Some(raw_dmarc.clone());
 
-            let mut tags = HashMap::new();
-            for part in raw_dmarc.split(';') {
-                let trimmed = part.trim();
-                if let Some((k, v)) = trimmed.split_once('=') {
-                    tags.insert(k.trim().to_lowercase(), v.trim().to_string());
-                }
-            }
+            let tags = Self::parse_dmarc_tags(raw_dmarc);
 
             let policy = tags.get("p").map(|s| s.to_lowercase()).unwrap_or_default();
             report.dmarc_policy = Some(policy.clone());
@@ -607,7 +625,7 @@ impl DnsResolver {
         Err(last_err)
     }
 
-    fn build_dns_query_packet(name: &str, qtype: u16) -> Result<Vec<u8>, String> {
+    pub fn build_dns_query_packet(name: &str, qtype: u16) -> Result<Vec<u8>, String> {
         let mut packet = Vec::with_capacity(64);
         // Header: ID (2), Flags (2), QDCOUNT (2), ANCOUNT (2), NSCOUNT (2), ARCOUNT (2)
         packet.extend_from_slice(&[0x12, 0x34]); // Transaction ID
@@ -634,17 +652,23 @@ impl DnsResolver {
         Ok(packet)
     }
 
-    fn parse_mx_response(buf: &[u8]) -> Result<Vec<(u16, String)>, String> {
+    pub fn parse_mx_response(buf: &[u8]) -> Result<Vec<(u16, String)>, String> {
         if buf.len() < 12 {
-            return Err("Truncated DNS response".to_string());
+            return Err("Truncated DNS response header".to_string());
         }
-        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
         let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
 
         let mut offset = 12;
         // Skip Question section
         for _ in 0..qdcount {
+            if offset >= buf.len() {
+                return Err("Truncated Question section".to_string());
+            }
             offset = Self::skip_name(buf, offset)?;
+            if offset.saturating_add(4) > buf.len() {
+                return Err("Truncated Question QTYPE/QCLASS".to_string());
+            }
             offset += 4; // QTYPE (2) + QCLASS (2)
         }
 
@@ -654,17 +678,22 @@ impl DnsResolver {
                 break;
             }
             offset = Self::skip_name(buf, offset)?;
-            if offset + 10 > buf.len() {
+            if offset.saturating_add(10) > buf.len() {
                 break;
             }
             let rtype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
             let rdlength = u16::from_be_bytes([buf[offset + 8], buf[offset + 9]]) as usize;
             offset += 10;
 
+            if offset.saturating_add(rdlength) > buf.len() {
+                break;
+            }
+
             if rtype == DNS_TYPE_MX && rdlength >= 3 {
                 let pref = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-                let (exchange, _) = Self::read_name(buf, offset + 2)?;
-                results.push((pref, exchange));
+                if let Ok((exchange, _)) = Self::read_name(buf, offset + 2) {
+                    results.push((pref, exchange));
+                }
             }
             offset += rdlength;
         }
@@ -672,16 +701,22 @@ impl DnsResolver {
         Ok(results)
     }
 
-    fn parse_a_response(buf: &[u8]) -> Result<Vec<String>, String> {
+    pub fn parse_a_response(buf: &[u8]) -> Result<Vec<String>, String> {
         if buf.len() < 12 {
-            return Err("Truncated DNS response".to_string());
+            return Err("Truncated DNS response header".to_string());
         }
-        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
         let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
 
         let mut offset = 12;
         for _ in 0..qdcount {
+            if offset >= buf.len() {
+                return Err("Truncated Question section".to_string());
+            }
             offset = Self::skip_name(buf, offset)?;
+            if offset.saturating_add(4) > buf.len() {
+                return Err("Truncated Question QTYPE/QCLASS".to_string());
+            }
             offset += 4;
         }
 
@@ -691,14 +726,18 @@ impl DnsResolver {
                 break;
             }
             offset = Self::skip_name(buf, offset)?;
-            if offset + 10 > buf.len() {
+            if offset.saturating_add(10) > buf.len() {
                 break;
             }
             let rtype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
             let rdlength = u16::from_be_bytes([buf[offset + 8], buf[offset + 9]]) as usize;
             offset += 10;
 
-            if rtype == DNS_TYPE_A && rdlength == 4 && offset + 4 <= buf.len() {
+            if offset.saturating_add(rdlength) > buf.len() {
+                break;
+            }
+
+            if rtype == DNS_TYPE_A && rdlength == 4 {
                 let ip = format!("{}.{}.{}.{}", buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]);
                 ips.push(ip);
             }
@@ -707,16 +746,22 @@ impl DnsResolver {
         Ok(ips)
     }
 
-    fn parse_txt_response(buf: &[u8]) -> Result<Vec<String>, String> {
+    pub fn parse_txt_response(buf: &[u8]) -> Result<Vec<String>, String> {
         if buf.len() < 12 {
-            return Err("Truncated DNS response".to_string());
+            return Err("Truncated DNS response header".to_string());
         }
-        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
         let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
 
         let mut offset = 12;
         for _ in 0..qdcount {
+            if offset >= buf.len() {
+                return Err("Truncated Question section".to_string());
+            }
             offset = Self::skip_name(buf, offset)?;
+            if offset.saturating_add(4) > buf.len() {
+                return Err("Truncated Question QTYPE/QCLASS".to_string());
+            }
             offset += 4;
         }
 
@@ -726,14 +771,18 @@ impl DnsResolver {
                 break;
             }
             offset = Self::skip_name(buf, offset)?;
-            if offset + 10 > buf.len() {
+            if offset.saturating_add(10) > buf.len() {
                 break;
             }
             let rtype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
             let rdlength = u16::from_be_bytes([buf[offset + 8], buf[offset + 9]]) as usize;
             offset += 10;
 
-            if rtype == DNS_TYPE_TXT && offset + rdlength <= buf.len() {
+            if offset.saturating_add(rdlength) > buf.len() {
+                break;
+            }
+
+            if rtype == DNS_TYPE_TXT {
                 let mut txt_chunk_offset = offset;
                 let end = offset + rdlength;
                 let mut full_txt = String::new();
@@ -741,9 +790,8 @@ impl DnsResolver {
                     let len = buf[txt_chunk_offset] as usize;
                     txt_chunk_offset += 1;
                     if txt_chunk_offset + len <= end {
-                        if let Ok(s) = std::str::from_utf8(&buf[txt_chunk_offset..txt_chunk_offset + len]) {
-                            full_txt.push_str(s);
-                        }
+                        let s = String::from_utf8_lossy(&buf[txt_chunk_offset..txt_chunk_offset + len]);
+                        full_txt.push_str(&s);
                         txt_chunk_offset += len;
                     } else {
                         break;
@@ -758,16 +806,22 @@ impl DnsResolver {
         Ok(records)
     }
 
-    fn parse_ptr_response(buf: &[u8]) -> Result<Vec<String>, String> {
+    pub fn parse_ptr_response(buf: &[u8]) -> Result<Vec<String>, String> {
         if buf.len() < 12 {
-            return Err("Truncated DNS response".to_string());
+            return Err("Truncated DNS response header".to_string());
         }
-        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
         let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+        let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
 
         let mut offset = 12;
         for _ in 0..qdcount {
+            if offset >= buf.len() {
+                return Err("Truncated Question section".to_string());
+            }
             offset = Self::skip_name(buf, offset)?;
+            if offset.saturating_add(4) > buf.len() {
+                return Err("Truncated Question QTYPE/QCLASS".to_string());
+            }
             offset += 4;
         }
 
@@ -777,14 +831,18 @@ impl DnsResolver {
                 break;
             }
             offset = Self::skip_name(buf, offset)?;
-            if offset + 10 > buf.len() {
+            if offset.saturating_add(10) > buf.len() {
                 break;
             }
             let rtype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
             let rdlength = u16::from_be_bytes([buf[offset + 8], buf[offset + 9]]) as usize;
             offset += 10;
 
-            if rtype == DNS_TYPE_PTR && offset + rdlength <= buf.len() {
+            if offset.saturating_add(rdlength) > buf.len() {
+                break;
+            }
+
+            if rtype == DNS_TYPE_PTR {
                 if let Ok((name, _)) = Self::read_name(buf, offset) {
                     ptrs.push(name.trim_end_matches('.').to_string());
                 }
@@ -794,24 +852,39 @@ impl DnsResolver {
         Ok(ptrs)
     }
 
-    fn skip_name(buf: &[u8], mut offset: usize) -> Result<usize, String> {
+    pub fn skip_name(buf: &[u8], mut offset: usize) -> Result<usize, String> {
+        let mut steps = 0;
         while offset < buf.len() {
+            steps += 1;
+            if steps > buf.len() + 1 {
+                return Err("Name traversal loop in skip_name".to_string());
+            }
             let len = buf[offset] as usize;
             if len == 0 {
                 return Ok(offset + 1);
             } else if (len & 0xC0) == 0xC0 {
+                if offset + 1 >= buf.len() {
+                    return Err("Truncated compression pointer".to_string());
+                }
                 return Ok(offset + 2); // Pointer compression
+            } else if (len & 0xC0) != 0 {
+                return Err(format!("Unsupported DNS compression marker: 0x{:02X}", len));
             } else {
+                if offset + 1 + len > buf.len() {
+                    return Err("Truncated DNS label".to_string());
+                }
                 offset += 1 + len;
             }
         }
         Err("Malformed DNS name offset".to_string())
     }
 
-    fn read_name(buf: &[u8], mut offset: usize) -> Result<(String, usize), String> {
+    pub fn read_name(buf: &[u8], mut offset: usize) -> Result<(String, usize), String> {
+        const MAX_POINTER_JUMPS: usize = 16;
         let mut labels = Vec::new();
         let mut jumped = false;
         let mut bytes_read = 0;
+        let mut jump_count = 0;
         let initial_offset = offset;
 
         while offset < buf.len() {
@@ -820,29 +893,37 @@ impl DnsResolver {
                 if !jumped {
                     bytes_read = offset + 1 - initial_offset;
                 }
-                break;
+                return Ok((labels.join("."), bytes_read));
             } else if (len & 0xC0) == 0xC0 {
                 if offset + 1 >= buf.len() {
                     return Err("Pointer truncated".to_string());
                 }
+                jump_count += 1;
+                if jump_count > MAX_POINTER_JUMPS {
+                    return Err("DNS compression pointer loop detected".to_string());
+                }
                 let ptr_offset = (((len & 0x3F) << 8) | (buf[offset + 1] as usize)) as usize;
+                if ptr_offset >= buf.len() {
+                    return Err("Compression pointer target out of bounds".to_string());
+                }
                 if !jumped {
                     bytes_read = offset + 2 - initial_offset;
                     jumped = true;
                 }
                 offset = ptr_offset;
+            } else if (len & 0xC0) != 0 {
+                return Err(format!("Unsupported DNS label type: 0x{:02X}", len));
             } else {
                 offset += 1;
                 if offset + len > buf.len() {
                     return Err("Label truncated".to_string());
                 }
-                let label = std::str::from_utf8(&buf[offset..offset + len])
-                    .map_err(|e| e.to_string())?;
-                labels.push(label.to_string());
+                let label = String::from_utf8_lossy(&buf[offset..offset + len]).to_string();
+                labels.push(label);
                 offset += len;
             }
         }
 
-        Ok((labels.join("."), bytes_read))
+        Err("Unterminated DNS name reached end of packet".to_string())
     }
 }
