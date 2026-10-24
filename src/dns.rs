@@ -10,8 +10,6 @@ const DNS_TYPE_A: u16 = 1;
 const DNS_TYPE_PTR: u16 = 12;
 const DNS_TYPE_MX: u16 = 15;
 const DNS_TYPE_TXT: u16 = 16;
-#[allow(dead_code)]
-const DNS_TYPE_AAAA: u16 = 28;
 
 pub struct DnsResolver {
     nameservers: Vec<SocketAddr>,

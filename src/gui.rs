@@ -46,8 +46,6 @@ pub struct MxDetectiveApp {
 enum DiagnosticMessage {
     Status(String),
     Complete(DiagnosticResult),
-    #[allow(dead_code)]
-    Error(String),
 }
 
 fn open_in_system(target: &str) {
@@ -118,6 +116,7 @@ impl MxDetectiveApp {
 
     fn quick_export_downloads(&self, res: &DiagnosticResult) {
         let downloads_dir = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
             .map(|h| std::path::PathBuf::from(h).join("Downloads"))
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
@@ -137,6 +136,34 @@ impl MxDetectiveApp {
         let _ = std::fs::write(&txt_path, DiagnosticReporter::to_text(res));
 
         let _ = self.tx_export.send(Ok(html_path.to_string_lossy().to_string()));
+    }
+
+    fn render_export_menu(&self, ui: &mut egui::Ui, res: &DiagnosticResult) {
+        if ui.button("🌐 HTML Report (.html)...").on_hover_text("Open file dialog to save interactive HTML report").clicked() {
+            self.export_with_dialog(res, "html", "HTML");
+            ui.close_menu();
+        }
+        if ui.button("📝 Markdown Report (.md)...").on_hover_text("Open file dialog to save Markdown report").clicked() {
+            self.export_with_dialog(res, "md", "Markdown");
+            ui.close_menu();
+        }
+        if ui.button("📊 CSV Spreadsheet (.csv)...").on_hover_text("Open file dialog to save CSV diagnostic data").clicked() {
+            self.export_with_dialog(res, "csv", "CSV");
+            ui.close_menu();
+        }
+        if ui.button("📋 JSON Data (.json)...").on_hover_text("Open file dialog to save structured JSON").clicked() {
+            self.export_with_dialog(res, "json", "JSON");
+            ui.close_menu();
+        }
+        if ui.button("📄 Plain Text (.txt)...").on_hover_text("Open file dialog to save plain ASCII text report").clicked() {
+            self.export_with_dialog(res, "txt", "Plain Text");
+            ui.close_menu();
+        }
+        ui.separator();
+        if ui.button("⚡ Quick Export All to ~/Downloads").on_hover_text("Quickly saves HTML, MD, CSV, JSON, and TXT directly to ~/Downloads").clicked() {
+            self.quick_export_downloads(res);
+            ui.close_menu();
+        }
     }
 
     fn run_diagnostic(&mut self) {
@@ -252,10 +279,6 @@ impl eframe::App for MxDetectiveApp {
                         self.result = Some(res);
                         self.is_running = false;
                     }
-                    DiagnosticMessage::Error(e) => {
-                        self.status_text = format!("Error: {}", e);
-                        self.is_running = false;
-                    }
                 }
             }
         }
@@ -335,31 +358,7 @@ impl eframe::App for MxDetectiveApp {
                     ui.add_enabled_ui(export_enabled, |ui| {
                         ui.menu_button(egui::RichText::new("💾 Export Report ▾").strong(), |ui| {
                             if let Some(res) = &self.result {
-                                if ui.button("🌐 HTML Report (.html)...").on_hover_text("Open file dialog to save interactive HTML report").clicked() {
-                                    self.export_with_dialog(res, "html", "HTML");
-                                    ui.close_menu();
-                                }
-                                if ui.button("📝 Markdown Report (.md)...").on_hover_text("Open file dialog to save Markdown report").clicked() {
-                                    self.export_with_dialog(res, "md", "Markdown");
-                                    ui.close_menu();
-                                }
-                                if ui.button("📊 CSV Spreadsheet (.csv)...").on_hover_text("Open file dialog to save CSV diagnostic data").clicked() {
-                                    self.export_with_dialog(res, "csv", "CSV");
-                                    ui.close_menu();
-                                }
-                                if ui.button("📋 JSON Data (.json)...").on_hover_text("Open file dialog to save structured JSON").clicked() {
-                                    self.export_with_dialog(res, "json", "JSON");
-                                    ui.close_menu();
-                                }
-                                if ui.button("📄 Plain Text (.txt)...").on_hover_text("Open file dialog to save plain ASCII text report").clicked() {
-                                    self.export_with_dialog(res, "txt", "Plain Text");
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                if ui.button("⚡ Quick Export All to ~/Downloads").on_hover_text("Quickly saves HTML, MD, CSV, JSON, and TXT directly to ~/Downloads").clicked() {
-                                    self.quick_export_downloads(res);
-                                    ui.close_menu();
-                                }
+                                self.render_export_menu(ui, res);
                             }
                         });
                     });
@@ -431,31 +430,7 @@ impl eframe::App for MxDetectiveApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(res) = &self.result {
                         ui.menu_button("💾 Export...", |ui| {
-                            if ui.button("🌐 HTML Report (.html)...").clicked() {
-                                self.export_with_dialog(res, "html", "HTML");
-                                ui.close_menu();
-                            }
-                            if ui.button("📝 Markdown (.md)...").clicked() {
-                                self.export_with_dialog(res, "md", "Markdown");
-                                ui.close_menu();
-                            }
-                            if ui.button("📊 CSV (.csv)...").clicked() {
-                                self.export_with_dialog(res, "csv", "CSV");
-                                ui.close_menu();
-                            }
-                            if ui.button("📋 JSON (.json)...").clicked() {
-                                self.export_with_dialog(res, "json", "JSON");
-                                ui.close_menu();
-                            }
-                            if ui.button("📄 Plain Text (.txt)...").clicked() {
-                                self.export_with_dialog(res, "txt", "Plain Text");
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("⚡ Quick Export to ~/Downloads").clicked() {
-                                self.quick_export_downloads(res);
-                                ui.close_menu();
-                            }
+                            self.render_export_menu(ui, res);
                         });
                     }
                 });

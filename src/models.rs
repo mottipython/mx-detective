@@ -31,17 +31,6 @@ impl Severity {
             Severity::Info => 0,
         }
     }
-
-    #[allow(dead_code)]
-    pub fn color_hex(&self) -> &'static str {
-        match self {
-            Severity::Pass => "#10b981",     // Emerald green
-            Severity::Notice => "#3b82f6",   // Blue
-            Severity::Warning => "#f59e0b",  // Amber
-            Severity::Critical => "#ef4444", // Red
-            Severity::Info => "#6b7280",     // Gray
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
