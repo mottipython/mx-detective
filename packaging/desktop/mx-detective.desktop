@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=MX Detective
+Comment=Public MX Server, SMTP Handshake & Protocol Behavior Diagnostics
+Exec=mx-detective --gui
+Icon=mx-detective
+Terminal=false
+Type=Application
+Categories=Network;System;Security;
+Keywords=email;mx;smtp;dns;diagnostics;
+StartupWMClass=mx-detective

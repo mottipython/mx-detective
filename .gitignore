@@ -1,0 +1,7 @@
+/target
+dist/
+*-report.html
+*-report.md
+*-report.csv
+*-report.json
+*-report.txt
