@@ -37,7 +37,10 @@ pub struct MxDetectiveApp {
     status_text: String,
     result: Option<DiagnosticResult>,
     rx: Option<Receiver<DiagnosticMessage>>,
-    export_message: Option<String>,
+    export_message: Option<(bool, String)>,
+    last_exported_path: Option<String>,
+    tx_export: Sender<Result<String, String>>,
+    rx_export: Receiver<Result<String, String>>,
 }
 
 enum DiagnosticMessage {
@@ -47,8 +50,20 @@ enum DiagnosticMessage {
     Error(String),
 }
 
+fn open_in_system(target: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd").args(["/C", "start", "", target]).spawn();
+
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(target).spawn();
+
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+}
+
 impl MxDetectiveApp {
     pub fn new(initial_domain: Option<String>) -> Self {
+        let (tx_export, rx_export) = channel();
         Self {
             domain_input: initial_domain.unwrap_or_else(|| "google.com".to_string()),
             host_override: String::new(),
@@ -62,7 +77,66 @@ impl MxDetectiveApp {
             result: None,
             rx: None,
             export_message: None,
+            last_exported_path: None,
+            tx_export,
+            rx_export,
         }
+    }
+
+    fn export_with_dialog(&self, res: &DiagnosticResult, ext: &'static str, filter_name: &'static str) {
+        let domain = res.domain.clone();
+        let default_name = format!("{}-report.{}", domain, ext);
+        let content = match ext {
+            "html" => DiagnosticReporter::to_html(res),
+            "md" => DiagnosticReporter::to_markdown(res),
+            "csv" => DiagnosticReporter::to_csv(res),
+            "json" => DiagnosticReporter::to_json(res),
+            "txt" => DiagnosticReporter::to_text(res),
+            _ => return,
+        };
+        let tx = self.tx_export.clone();
+
+        thread::spawn(move || {
+            let dialog = rfd::FileDialog::new()
+                .set_file_name(&default_name)
+                .set_title(&format!("Save {} Report", filter_name))
+                .add_filter(filter_name, &[ext]);
+
+            if let Some(path_buf) = dialog.save_file() {
+                match std::fs::write(&path_buf, content) {
+                    Ok(_) => {
+                        let path_str = path_buf.to_string_lossy().to_string();
+                        let _ = tx.send(Ok(path_str));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("Could not write file: {}", e)));
+                    }
+                }
+            }
+        });
+    }
+
+    fn quick_export_downloads(&self, res: &DiagnosticResult) {
+        let downloads_dir = std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(h).join("Downloads"))
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
+        let _ = std::fs::create_dir_all(&downloads_dir);
+        let domain = &res.domain;
+
+        let html_path = downloads_dir.join(format!("{}-report.html", domain));
+        let md_path = downloads_dir.join(format!("{}-report.md", domain));
+        let csv_path = downloads_dir.join(format!("{}-report.csv", domain));
+        let json_path = downloads_dir.join(format!("{}-report.json", domain));
+        let txt_path = downloads_dir.join(format!("{}-report.txt", domain));
+
+        let _ = std::fs::write(&html_path, DiagnosticReporter::to_html(res));
+        let _ = std::fs::write(&md_path, DiagnosticReporter::to_markdown(res));
+        let _ = std::fs::write(&csv_path, DiagnosticReporter::to_csv(res));
+        let _ = std::fs::write(&json_path, DiagnosticReporter::to_json(res));
+        let _ = std::fs::write(&txt_path, DiagnosticReporter::to_text(res));
+
+        let _ = self.tx_export.send(Ok(html_path.to_string_lossy().to_string()));
     }
 
     fn run_diagnostic(&mut self) {
@@ -186,6 +260,19 @@ impl eframe::App for MxDetectiveApp {
             }
         }
 
+        // Poll background export results
+        while let Ok(msg) = self.rx_export.try_recv() {
+            match msg {
+                Ok(path) => {
+                    self.export_message = Some((false, format!("Successfully saved report: {}", path)));
+                    self.last_exported_path = Some(path);
+                }
+                Err(err) => {
+                    self.export_message = Some((true, format!("Export failed: {}", err)));
+                }
+            }
+        }
+
         let is_dark = ctx.style().visuals.dark_mode;
 
         // Top Control Panel
@@ -239,18 +326,96 @@ impl eframe::App for MxDetectiveApp {
                 if self.is_running {
                     ui.add(egui::Spinner::new());
                     ui.label(egui::RichText::new(&self.status_text).color(egui::Color32::from_rgb(96, 165, 250)));
-                } else if ui.button(egui::RichText::new("🔍 Inspect MX").strong().color(egui::Color32::WHITE)).clicked() {
-                    self.run_diagnostic();
+                } else {
+                    if ui.button(egui::RichText::new("🔍 Inspect MX").strong().color(egui::Color32::WHITE)).clicked() {
+                        self.run_diagnostic();
+                    }
+
+                    let export_enabled = self.result.is_some();
+                    ui.add_enabled_ui(export_enabled, |ui| {
+                        ui.menu_button(egui::RichText::new("💾 Export Report ▾").strong(), |ui| {
+                            if let Some(res) = &self.result {
+                                if ui.button("🌐 HTML Report (.html)...").on_hover_text("Open file dialog to save interactive HTML report").clicked() {
+                                    self.export_with_dialog(res, "html", "HTML");
+                                    ui.close_menu();
+                                }
+                                if ui.button("📝 Markdown Report (.md)...").on_hover_text("Open file dialog to save Markdown report").clicked() {
+                                    self.export_with_dialog(res, "md", "Markdown");
+                                    ui.close_menu();
+                                }
+                                if ui.button("📊 CSV Spreadsheet (.csv)...").on_hover_text("Open file dialog to save CSV diagnostic data").clicked() {
+                                    self.export_with_dialog(res, "csv", "CSV");
+                                    ui.close_menu();
+                                }
+                                if ui.button("📋 JSON Data (.json)...").on_hover_text("Open file dialog to save structured JSON").clicked() {
+                                    self.export_with_dialog(res, "json", "JSON");
+                                    ui.close_menu();
+                                }
+                                if ui.button("📄 Plain Text (.txt)...").on_hover_text("Open file dialog to save plain ASCII text report").clicked() {
+                                    self.export_with_dialog(res, "txt", "Plain Text");
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button("⚡ Quick Export All to ~/Downloads").on_hover_text("Quickly saves HTML, MD, CSV, JSON, and TXT directly to ~/Downloads").clicked() {
+                                    self.quick_export_downloads(res);
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                    });
                 }
             });
 
             if !self.is_running {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&self.status_text).small().color(egui::Color32::from_rgb(148, 163, 184)));
-                    if let Some(msg) = &self.export_message {
-                        ui.label(egui::RichText::new(msg).small().color(egui::Color32::from_rgb(52, 211, 153)));
-                    }
                 });
+            }
+
+            if let Some((is_error, msg)) = &self.export_message {
+                ui.add_space(2.0);
+                let (bg_color, border_color, text_color) = if *is_error {
+                    (
+                        egui::Color32::from_rgb(254, 242, 242),
+                        egui::Color32::from_rgb(239, 68, 68),
+                        egui::Color32::from_rgb(185, 28, 28),
+                    )
+                } else if is_dark {
+                    (
+                        egui::Color32::from_rgb(6, 78, 59),
+                        egui::Color32::from_rgb(16, 185, 129),
+                        egui::Color32::from_rgb(167, 243, 208),
+                    )
+                } else {
+                    (
+                        egui::Color32::from_rgb(236, 253, 245),
+                        egui::Color32::from_rgb(16, 185, 129),
+                        egui::Color32::from_rgb(4, 120, 87),
+                    )
+                };
+
+                egui::Frame::none()
+                    .fill(bg_color)
+                    .stroke(egui::Stroke::new(1.0_f32, border_color))
+                    .rounding(4.0)
+                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let icon = if *is_error { "❌" } else { "✓" };
+                            ui.label(egui::RichText::new(format!("{} {}", icon, msg)).strong().color(text_color));
+
+                            if let Some(path) = &self.last_exported_path {
+                                if ui.button("📂 Open Folder").on_hover_text("Open containing folder in file manager").clicked() {
+                                    if let Some(parent) = std::path::Path::new(path).parent() {
+                                        open_in_system(&parent.to_string_lossy());
+                                    }
+                                }
+                                if ui.button("📄 View File").on_hover_text("Open file in default viewer").clicked() {
+                                    open_in_system(path);
+                                }
+                            }
+                        });
+                    });
             }
 
             ui.add_space(4.0);
@@ -266,44 +431,29 @@ impl eframe::App for MxDetectiveApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(res) = &self.result {
                         ui.menu_button("💾 Export...", |ui| {
-                            if ui.button("🌐 HTML Report (.html)").clicked() {
-                                let html = DiagnosticReporter::to_html(res);
-                                let path = format!("{}-report.html", res.domain);
-                                if std::fs::write(&path, html).is_ok() {
-                                    self.export_message = Some(format!("✓ Saved {}", path));
-                                }
+                            if ui.button("🌐 HTML Report (.html)...").clicked() {
+                                self.export_with_dialog(res, "html", "HTML");
                                 ui.close_menu();
                             }
-                            if ui.button("📝 Markdown (.md)").clicked() {
-                                let md = DiagnosticReporter::to_markdown(res);
-                                let path = format!("{}-report.md", res.domain);
-                                if std::fs::write(&path, md).is_ok() {
-                                    self.export_message = Some(format!("✓ Saved {}", path));
-                                }
+                            if ui.button("📝 Markdown (.md)...").clicked() {
+                                self.export_with_dialog(res, "md", "Markdown");
                                 ui.close_menu();
                             }
-                            if ui.button("📊 CSV (.csv)").clicked() {
-                                let csv = DiagnosticReporter::to_csv(res);
-                                let path = format!("{}-report.csv", res.domain);
-                                if std::fs::write(&path, csv).is_ok() {
-                                    self.export_message = Some(format!("✓ Saved {}", path));
-                                }
+                            if ui.button("📊 CSV (.csv)...").clicked() {
+                                self.export_with_dialog(res, "csv", "CSV");
                                 ui.close_menu();
                             }
-                            if ui.button("📋 JSON (.json)").clicked() {
-                                let json = DiagnosticReporter::to_json(res);
-                                let path = format!("{}-report.json", res.domain);
-                                if std::fs::write(&path, json).is_ok() {
-                                    self.export_message = Some(format!("✓ Saved {}", path));
-                                }
+                            if ui.button("📋 JSON (.json)...").clicked() {
+                                self.export_with_dialog(res, "json", "JSON");
                                 ui.close_menu();
                             }
-                            if ui.button("📄 Plain Text (.txt)").clicked() {
-                                let txt = DiagnosticReporter::to_text(res);
-                                let path = format!("{}-report.txt", res.domain);
-                                if std::fs::write(&path, txt).is_ok() {
-                                    self.export_message = Some(format!("✓ Saved {}", path));
-                                }
+                            if ui.button("📄 Plain Text (.txt)...").clicked() {
+                                self.export_with_dialog(res, "txt", "Plain Text");
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("⚡ Quick Export to ~/Downloads").clicked() {
+                                self.quick_export_downloads(res);
                                 ui.close_menu();
                             }
                         });
@@ -599,7 +749,8 @@ pub fn launch_gui(initial_domain: Option<String>) -> Result<(), eframe::Error> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([980.0, 720.0])
         .with_min_inner_size([720.0, 500.0])
-        .with_title("MX Detective");
+        .with_title("MX Detective")
+        .with_app_id("mx-detective");
 
     if let Some(icon) = icon_data {
         viewport = viewport.with_icon(icon);
@@ -611,7 +762,7 @@ pub fn launch_gui(initial_domain: Option<String>) -> Result<(), eframe::Error> {
     };
 
     eframe::run_native(
-        "MX Detective",
+        "mx-detective",
         options,
         Box::new(|_cc| Ok(Box::new(MxDetectiveApp::new(initial_domain)))),
     )
