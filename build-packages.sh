@@ -2,14 +2,14 @@
 # ==============================================================================
 # MX Detective - Multi-Platform Packaging Script
 # Builds Release binary, RPM package (.rpm), Debian package (.deb),
-# Arch Linux package (.pkg.tar.zst), Windows (.zip), and macOS (.tar.gz)
+# Arch Linux package (.pkg.tar.zst), Windows (.exe), and macOS (.tar.gz)
 # ==============================================================================
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
-VERSION="0.1.0"
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "${ROOT_DIR}/Cargo.toml" | head -1)"
 
 echo -e "\033[1;96m╔═══════════════════════════════════════════════════════════════════════════╗\033[0m"
 echo -e "\033[1;96m║               MX DETECTIVE - PACKAGING & DISTRIBUTION BUILDER             ║\033[0m"
@@ -126,7 +126,6 @@ packager = Motti Schleider <motti.schleider@gmail.com>
 size = ${TOTAL_SIZE}
 arch = x86_64
 license = MIT
-depend = openssl
 depend = libx11
 depend = libxcursor
 depend = libxrandr
@@ -139,18 +138,11 @@ tar --use-compress-program="zstd -19 -T0" -cf "${ARCH_OUTPUT}" .PKGINFO usr/
 rm -rf "${ARCH_DIR}"
 echo -e "\033[1;92m[✓] Arch Linux Package created: ${ARCH_OUTPUT}\033[0m"
 
-# 6. Windows Package (.zip) if compiled
+# 6. Windows portable executable, if compiled
 WIN_BIN="${ROOT_DIR}/target/x86_64-pc-windows-gnu/release/mx-detective.exe"
 if [[ -f "${WIN_BIN}" ]]; then
-    echo -e "\n\033[1;94m[*] Packaging Windows x86_64 release (.zip)...\033[0m"
-    WIN_TMP="${ROOT_DIR}/target/win_pkg"
-    rm -rf "${WIN_TMP}"
-    mkdir -p "${WIN_TMP}/mx-detective-windows-x86_64"
-    cp "${WIN_BIN}" "${WIN_TMP}/mx-detective-windows-x86_64/"
-    cp "${ROOT_DIR}/README.md" "${WIN_TMP}/mx-detective-windows-x86_64/"
-    (cd "${WIN_TMP}" && zip -r "${DIST_DIR}/mx-detective-v${VERSION}-windows-x86_64.zip" mx-detective-windows-x86_64)
-    rm -rf "${WIN_TMP}"
-    echo -e "\033[1;92m[✓] Windows package created: ${DIST_DIR}/mx-detective-v${VERSION}-windows-x86_64.zip\033[0m"
+    cp "${WIN_BIN}" "${DIST_DIR}/mx-detective-windows-x86_64.exe"
+    echo -e "\n\033[1;92m[✓] Portable Windows executable: ${DIST_DIR}/mx-detective-windows-x86_64.exe\033[0m"
 fi
 
 # 7. macOS Packages (.tar.gz) if compiled

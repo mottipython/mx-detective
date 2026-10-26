@@ -1,12 +1,12 @@
 # Maintainer: Motti Schleider <motti.schleider@gmail.com>
 pkgname=mx-detective
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Public MX server, SMTP handshake and mail security diagnostic tool"
 arch=('x86_64')
 url="https://github.com/mottipython/mx-detective"
 license=('MIT')
-depends=('openssl' 'libx11' 'libxcursor' 'libxrandr' 'libxi')
+depends=('libx11' 'libxcursor' 'libxrandr' 'libxi')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
