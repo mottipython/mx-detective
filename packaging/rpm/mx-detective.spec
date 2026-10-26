@@ -1,5 +1,6 @@
+%{!?pkg_version:%global pkg_version 1.0.0}
 Name:           mx-detective
-Version:        0.2.0
+Version:        %{pkg_version}
 Release:        1%{?dist}
 Summary:        Public MX server, SMTP handshake and mail security diagnostic tool
 License:        MIT
@@ -23,7 +24,7 @@ install -m 0644 %{_sourcedir}/mx-detective.desktop $RPM_BUILD_ROOT%{_datadir}/ap
 %{_datadir}/applications/mx-detective.desktop
 
 %changelog
-* Mon Oct 26 2026 Motti Schleider <motti.schleider@gmail.com> - 0.2.0-1
+* Mon Oct 26 2026 Motti Schleider <motti.schleider@gmail.com> - 1.0.0-1
 - Report the real TLS certificate; test every MX address; add MTA-STS, DANE,
   DNSSEC, TLS-RPT, BIMI, blocklist and DKIM checks
 * Fri Oct 23 2026 Motti Schleider <motti.schleider@gmail.com> - 0.1.0-1

@@ -17,9 +17,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Tag matches Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: test "v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$GITHUB_REF_NAME"
+      - name: Version is consistent
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          grep -q "^pkgver=${version}$" packaging/arch/PKGBUILD
+          grep -q "global pkg_version ${version}}" packaging/rpm/mx-detective.spec
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then test "v${version}" = "$GITHUB_REF_NAME"; fi
 
       - name: Install dependencies
         run: |
@@ -67,7 +70,7 @@ jobs:
           mkdir -p rpm_top/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           cp target/release/mx-detective rpm_top/SOURCES/
           cp packaging/desktop/mx-detective.desktop rpm_top/SOURCES/
-          rpmbuild --define "_topdir $(pwd)/rpm_top" --define "_tmppath /tmp" -bb packaging/rpm/mx-detective.spec
+          rpmbuild --define "pkg_version ${VERSION}" --define "_topdir $(pwd)/rpm_top" --define "_tmppath /tmp" -bb packaging/rpm/mx-detective.spec
           cp rpm_top/RPMS/*/*.rpm dist/
 
       - name: Create Arch Linux Package (.pkg.tar.zst)
