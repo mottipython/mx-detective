@@ -5,3 +5,6 @@ dist/
 *-report.csv
 *-report.json
 *-report.txt
+fuzz/target
+fuzz/corpus
+fuzz/artifacts

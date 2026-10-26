@@ -1,0 +1,71 @@
+name: Security
+
+on:
+  push:
+    branches: [master]
+    paths: ["Cargo.toml", "Cargo.lock", "src/**", "fuzz/**", ".github/workflows/security.yml"]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  snyk:
+    name: Snyk Code
+    runs-on: ubuntu-latest
+    # Fork pull requests cannot read the token; they are covered by CI and cargo audit.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: snyk/actions/setup@master
+      - name: snyk code test
+        if: env.SNYK_TOKEN != ''
+        run: snyk code test --severity-threshold=low
+      - name: Token missing
+        if: env.SNYK_TOKEN == ''
+        run: echo "::warning::SNYK_TOKEN repository secret is not set, so Snyk did not run."
+
+  fuzz:
+    name: fuzz (${{ matrix.target }}, AddressSanitizer)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [dns_packets, smtp_lines, http_and_policy, record_parsers, certificate_matching]
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev libwayland-dev libxkbcommon-dev clang
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: Fuzz for 5 minutes
+        working-directory: fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300 -rss_limit_mb=2048 -timeout=20
+      - name: Keep the crashing input, if any
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}

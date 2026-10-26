@@ -1,0 +1,44 @@
+[package]
+name = "mx-detective-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mx-detective = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "dns_packets"
+path = "fuzz_targets/dns_packets.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "smtp_lines"
+path = "fuzz_targets/smtp_lines.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "http_and_policy"
+path = "fuzz_targets/http_and_policy.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "record_parsers"
+path = "fuzz_targets/record_parsers.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "certificate_matching"
+path = "fuzz_targets/certificate_matching.rs"
+test = false
+doc = false
