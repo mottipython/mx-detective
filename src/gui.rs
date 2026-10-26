@@ -1,6 +1,4 @@
 use eframe::egui;
-use egui_backend_selector::{BackendConfiguration, BackendInterop};
-use egui_software_backend::SoftwareBackendAppConfiguration;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
@@ -243,8 +241,9 @@ impl MxDetectiveApp {
     }
 }
 
-impl egui_backend_selector::App for MxDetectiveApp {
-    fn ui(&mut self, root: &mut egui::Ui, _backend: BackendInterop<'_>) {
+impl MxDetectiveApp {
+    /// Draws one frame.
+    fn show(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         let ctx = &ctx;
         match self.theme_mode {
@@ -1092,8 +1091,23 @@ impl MxDetectiveApp {
     }
 }
 
-/// Opens the window. Uses OpenGL where it works and falls back to a CPU renderer on remote
-/// desktop sessions, virtual machines and machines without graphics drivers.
+#[cfg(not(windows))]
+impl egui_backend_selector::App for MxDetectiveApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _backend: egui_backend_selector::BackendInterop<'_>) {
+        self.show(ui);
+    }
+}
+
+#[cfg(windows)]
+impl egui_software_backend::App for MxDetectiveApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _backend: &mut egui_software_backend::SoftwareBackend) {
+        self.show(ui);
+    }
+}
+
+/// Opens the window. It draws on the CPU, so it needs no graphics driver and opens in virtual
+/// machines and remote desktop sessions. On Windows that is always; elsewhere OpenGL is used
+/// when it works.
 pub fn launch_gui(initial_domain: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([980.0, 720.0])
@@ -1104,17 +1118,31 @@ pub fn launch_gui(initial_domain: Option<String>) -> Result<(), Box<dyn std::err
         viewport = viewport.with_icon(icon);
     }
 
-    if std::env::var_os("MX_DETECTIVE_SOFTWARE_RENDER").is_some() {
-        egui_backend_selector::overwrite_backend(egui_backend_selector::Backend::SoftwareBackend);
-    }
-
     // Caching is off because it renders incorrectly in the software backend (upstream issue 11).
-    let software = SoftwareBackendAppConfiguration {
+    let software = egui_software_backend::SoftwareBackendAppConfiguration {
         caching: false,
+        viewport_builder: viewport.clone(),
         ..Default::default()
     };
-    let config = BackendConfiguration::new(viewport, eframe::NativeOptions::default(), software);
-    egui_backend_selector::run_app("mx-detective", config, move |_ctx, _storage| {
-        MxDetectiveApp::new(initial_domain.clone())
-    })
+
+    #[cfg(windows)]
+    {
+        let _ = viewport;
+        egui_software_backend::run_app_with_software_backend(software, move |_ctx| {
+            MxDetectiveApp::new(initial_domain.clone())
+        })?;
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        use egui_backend_selector::{Backend, BackendConfiguration};
+        if std::env::var_os("MX_DETECTIVE_SOFTWARE_RENDER").is_some() {
+            egui_backend_selector::overwrite_backend(Backend::SoftwareBackend);
+        }
+        let config = BackendConfiguration::new(viewport, eframe::NativeOptions::default(), software);
+        egui_backend_selector::run_app("mx-detective", config, move |_ctx, _storage| {
+            MxDetectiveApp::new(initial_domain.clone())
+        })
+    }
 }

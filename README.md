@@ -190,7 +190,7 @@ Findings are Critical, Warning, Notice, Info or Pass and roll up into a score an
 
 `mx-detective --gui`, or double-click `mx-detective.exe` on Windows. Tabs: findings, SMTP behavior, servers and TLS (one row per address), DNS, ports, and the raw transcript of any server's session. Light and dark themes; export from the menu.
 
-It works without a graphics driver: it uses OpenGL when the machine has it and switches to a built-in software renderer in remote desktop sessions, virtual machines and fresh installs. If the window cannot open at all, the command line still works.
+It needs no graphics driver. On Windows it always draws on the CPU, so it opens in virtual machines, remote desktop sessions and fresh installs. On Linux and macOS it uses OpenGL when that works and switches to the CPU renderer on remote displays; `MX_DETECTIVE_SOFTWARE_RENDER=1` forces the CPU renderer there. If the window cannot open at all, the command line still works.
 
 ## Notes
 
