@@ -1,6 +1,5 @@
 use mx_detective::models::{
-    CheckItem, DiagnosticResult, MisbehaviorAnomaly, PortProbe, Severity, SmtpReport,
-    TranscriptEntry,
+    CheckItem, DiagnosticResult, MisbehaviorAnomaly, PortProbe, Severity, SmtpReport, TranscriptEntry,
 };
 use mx_detective::reporter::DiagnosticReporter;
 
@@ -38,7 +37,10 @@ fn test_critical_score_capping() {
     });
     res.calculate_score();
 
-    assert!(res.score <= 69, "Score should be capped at 69 when critical issue exists");
+    assert!(
+        res.score <= 69,
+        "Score should be capped at 69 when critical issue exists"
+    );
     assert_eq!(res.grade, "D");
 }
 
@@ -72,10 +74,8 @@ fn test_all_report_formats() {
         connect_time_ms: 15.0,
         banner: Some("220 mx1.testdomain.org ESMTP".to_string()),
         banner_time_ms: 45.0,
-        is_tarpit: false,
         banner_rfc_compliant: true,
         banner_has_fqdn: true,
-        early_talker_rejected: false,
         esmtp_supported: true,
         multiline_format_valid: true,
         capabilities: vec!["STARTTLS".to_string(), "SIZE 52428800".to_string()],
@@ -84,18 +84,12 @@ fn test_all_report_formats() {
         plaintext_auth_offered: true,
         starttls_advertised: true,
         pipelining_supported: true,
-        chunking_supported: false,
         smtputf8_supported: true,
         null_sender_accepted: Some(false),
         open_relay_tested: true,
-        open_relay_detected: false,
         open_relay_response: Some("550 Relay access denied".to_string()),
-        recipient_tested: None,
-        recipient_accepted: None,
-        recipient_response: None,
         rset_working: true,
         quit_clean: true,
-        error_message: None,
         anomalies: vec![MisbehaviorAnomaly {
             code: "REJECTS_NULL_SENDER".to_string(),
             title: "RFC 5321 §3.6 Violation: Rejects Null Sender".to_string(),
@@ -116,6 +110,7 @@ fn test_all_report_formats() {
                 text: "EHLO diagnostic.local".to_string(),
             },
         ],
+        ..Default::default()
     };
 
     res.smtp = Some(smtp);
