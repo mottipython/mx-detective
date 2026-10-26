@@ -1,6 +1,6 @@
 [package]
 name = "mx-detective"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Motti Schleider <motti.schleider@gmail.com>"]
 description = "A diagnostic tool for probing public MX servers, testing connectivity issues, and detecting non-compliant or misbehaving SMTP responses."
@@ -19,6 +19,18 @@ clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-eframe = { version = "0.28", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-native-tls = "0.2"
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wayland", "x11"] }
+egui_software_backend = "0.0.3"
+egui_backend_selector = { version = "0.0.2", default-features = false, features = ["glow"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+x509-parser = "0.18"
+sha2 = "0.10"
 rfd = "0.15"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
+
+[profile.release]
+lto = true
+strip = true

@@ -1,11 +1,10 @@
 use mx_detective::dns::DnsResolver;
 use mx_detective::models::{
-    CheckItem, DiagnosticResult, DnsReport, MisbehaviorAnomaly, MxHost, PortProbe, Severity,
-    SmtpReport, TranscriptEntry,
+    CheckItem, DiagnosticResult, DnsReport, MisbehaviorAnomaly, MxHost, PortProbe, Severity, SmtpReport,
+    TranscriptEntry,
 };
 use mx_detective::reporter::DiagnosticReporter;
 use mx_detective::smtp::SmtpProber;
-use std::collections::HashMap;
 use std::time::Duration;
 
 /// Simple fast reproducible 64-bit XorShift PRNG for zero-dependency fuzzing
@@ -51,7 +50,8 @@ impl FuzzRng {
 
     fn random_string_up_to(&mut self, max: usize) -> String {
         let len = self.next_usize(max);
-        let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.;= <>/\"'\\!@#$%^&*()[]{}:,?\r\n\0\t";
+        let chars =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.;= <>/\"'\\!@#$%^&*()[]{}:,?\r\n\0\t";
         let mut s = String::with_capacity(len);
         for _ in 0..len {
             let idx = self.next_usize(chars.len());
@@ -63,11 +63,47 @@ impl FuzzRng {
     fn random_unicode_string_up_to(&mut self, max_chars: usize) -> String {
         let char_count = self.next_usize(max_chars);
         let sample = [
-            "a", "B", "1", "-", "_", ".", ";", "=", " ", "\t", "\r", "\n", "\0",
-            "é", "ñ", "ü", "ø", "ß", "ç", "å", // 2-byte UTF-8
-            "€", "漢", "字", "안", "녕", "하", "세", "요", // 3-byte UTF-8
-            "🚀", "🔥", "✨", "🎉", "💀", "👾", "🛡️", // 4-byte UTF-8
-            "<script>", "\"quotes\"", "'single'", "\\backslash", "&amp;", "|pipe|",
+            "a",
+            "B",
+            "1",
+            "-",
+            "_",
+            ".",
+            ";",
+            "=",
+            " ",
+            "\t",
+            "\r",
+            "\n",
+            "\0",
+            "é",
+            "ñ",
+            "ü",
+            "ø",
+            "ß",
+            "ç",
+            "å", // 2-byte UTF-8
+            "€",
+            "漢",
+            "字",
+            "안",
+            "녕",
+            "하",
+            "세",
+            "요", // 3-byte UTF-8
+            "🚀",
+            "🔥",
+            "✨",
+            "🎉",
+            "💀",
+            "👾",
+            "🛡️", // 4-byte UTF-8
+            "<script>",
+            "\"quotes\"",
+            "'single'",
+            "\\backslash",
+            "&amp;",
+            "|pipe|",
         ];
         let mut s = String::new();
         for _ in 0..char_count {
@@ -246,8 +282,14 @@ fn test_fuzz_smtp_status_code_parser() {
     assert_eq!(SmtpProber::parse_smtp_status_code("250 OK"), Some((250, true)));
     assert_eq!(SmtpProber::parse_smtp_status_code("250-STARTTLS"), Some((250, false)));
     assert_eq!(SmtpProber::parse_smtp_status_code("250"), Some((250, true)));
-    assert_eq!(SmtpProber::parse_smtp_status_code("550 User not found"), Some((550, true)));
-    assert_eq!(SmtpProber::parse_smtp_status_code("220 mx.example.com ESMTP"), Some((220, true)));
+    assert_eq!(
+        SmtpProber::parse_smtp_status_code("550 User not found"),
+        Some((550, true))
+    );
+    assert_eq!(
+        SmtpProber::parse_smtp_status_code("220 mx.example.com ESMTP"),
+        Some((220, true))
+    );
 
     assert_eq!(SmtpProber::parse_smtp_status_code(""), None);
     assert_eq!(SmtpProber::parse_smtp_status_code("2"), None);
@@ -256,9 +298,8 @@ fn test_fuzz_smtp_status_code_parser() {
     assert_eq!(SmtpProber::parse_smtp_status_code("25A OK"), None);
 
     let tricky_inputs = [
-        "€50", "🚀50", "漢50", "é50", "2€0", "25€",
-        "🚀 250", "   250", "\t250", "\r\n250",
-        "250\0OK", "250\r\n", "250-", "250 ",
+        "€50", "🚀50", "漢50", "é50", "2€0", "25€", "🚀 250", "   250", "\t250", "\r\n250", "250\0OK", "250\r\n",
+        "250-", "250 ",
     ];
     for input in &tricky_inputs {
         let _ = SmtpProber::parse_smtp_status_code(input);
@@ -276,7 +317,10 @@ fn test_fuzz_smtp_capability_extractor() {
 
     assert_eq!(SmtpProber::extract_ehlo_capability("250-STARTTLS"), "STARTTLS");
     assert_eq!(SmtpProber::extract_ehlo_capability("250 STARTTLS"), "STARTTLS");
-    assert_eq!(SmtpProber::extract_ehlo_capability("250-SIZE 52428800"), "SIZE 52428800");
+    assert_eq!(
+        SmtpProber::extract_ehlo_capability("250-SIZE 52428800"),
+        "SIZE 52428800"
+    );
     assert_eq!(SmtpProber::extract_ehlo_capability("250-PIPELINING"), "PIPELINING");
     assert_eq!(SmtpProber::extract_ehlo_capability("STARTTLS"), "STARTTLS");
     assert_eq!(SmtpProber::extract_ehlo_capability("250"), "");
@@ -303,7 +347,14 @@ fn test_fuzz_smtp_ehlo_extensions_parser() {
             let choice = rng.next_usize(8);
             let line = match choice {
                 0 => format!("250-STARTTLS {}", rng.random_string_up_to(5)),
-                1 => format!("250-SIZE {}", if rng.next_usize(2) == 0 { rng.next_u64().to_string() } else { "invalid_number".to_string() }),
+                1 => format!(
+                    "250-SIZE {}",
+                    if rng.next_usize(2) == 0 {
+                        rng.next_u64().to_string()
+                    } else {
+                        "invalid_number".to_string()
+                    }
+                ),
                 2 => format!("250-AUTH {}", rng.random_string_up_to(20)),
                 3 => "250-PIPELINING".to_string(),
                 4 => "250-CHUNKING".to_string(),
@@ -319,34 +370,12 @@ fn test_fuzz_smtp_ehlo_extensions_parser() {
             port: 25,
             connected: true,
             connect_time_ms: 10.0,
-            banner: None,
             banner_time_ms: 20.0,
-            is_tarpit: false,
             banner_rfc_compliant: true,
             banner_has_fqdn: true,
-            early_talker_rejected: false,
             esmtp_supported: true,
             multiline_format_valid: true,
-            capabilities: Vec::new(),
-            max_message_size_bytes: None,
-            auth_mechanisms: Vec::new(),
-            plaintext_auth_offered: false,
-            starttls_advertised: false,
-            pipelining_supported: false,
-            chunking_supported: false,
-            smtputf8_supported: false,
-            null_sender_accepted: None,
-            open_relay_tested: false,
-            open_relay_detected: false,
-            open_relay_response: None,
-            recipient_tested: None,
-            recipient_accepted: None,
-            recipient_response: None,
-            rset_working: false,
-            quit_clean: false,
-            error_message: None,
-            anomalies: Vec::new(),
-            transcript: Vec::new(),
+            ..Default::default()
         };
 
         let mut checks = Vec::new();
@@ -383,7 +412,13 @@ fn test_fuzz_reporter_all_formats() {
         };
         res.grade = rng.random_unicode_string_up_to(5);
         res.target_ip = if rng.next_usize(2) == 0 {
-            Some(format!("{}.{}.{}.{}", rng.next_usize(256), rng.next_usize(256), rng.next_usize(256), rng.next_usize(256)))
+            Some(format!(
+                "{}.{}.{}.{}",
+                rng.next_usize(256),
+                rng.next_usize(256),
+                rng.next_usize(256),
+                rng.next_usize(256)
+            ))
         } else {
             None
         };
@@ -442,19 +477,19 @@ fn test_fuzz_reporter_all_formats() {
             let mut dns = DnsReport {
                 domain: rng.random_unicode_string_up_to(15),
                 has_mx_records: rng.next_usize(2) == 0,
-                fallback_to_a: false,
-                mx_hosts: Vec::new(),
-                spf_record: if rng.next_usize(2) == 0 { Some(rng.random_unicode_string_up_to(30)) } else { None },
-                spf_multiple: false,
+                spf_record: if rng.next_usize(2) == 0 {
+                    Some(rng.random_unicode_string_up_to(30))
+                } else {
+                    None
+                },
                 spf_lookup_count: rng.next_usize(20),
-                spf_qualifier: None,
-                spf_mechanisms: Vec::new(),
-                dmarc_record: if rng.next_usize(2) == 0 { Some(rng.random_unicode_string_up_to(30)) } else { None },
-                dmarc_policy: None,
+                dmarc_record: if rng.next_usize(2) == 0 {
+                    Some(rng.random_unicode_string_up_to(30))
+                } else {
+                    None
+                },
                 dmarc_pct: 100,
-                dmarc_rua: None,
-                dkim_selector: None,
-                dkim_record: None,
+                ..Default::default()
             };
 
             let mx_count = rng.next_usize(4);
@@ -463,11 +498,7 @@ fn test_fuzz_reporter_all_formats() {
                     hostname: rng.random_unicode_string_up_to(15),
                     priority: rng.next_u32() as u16,
                     ipv4_addresses: vec!["1.2.3.4".to_string()],
-                    ipv6_addresses: Vec::new(),
-                    is_cname: false,
-                    is_null_mx: false,
-                    ptr_records: HashMap::new(),
-                    fcrdns_valid: HashMap::new(),
+                    ..Default::default()
                 });
             }
             res.dns = Some(dns);
@@ -481,32 +512,20 @@ fn test_fuzz_reporter_all_formats() {
                 connect_time_ms: 12.0,
                 banner: Some(rng.random_unicode_string_up_to(25)),
                 banner_time_ms: 40.0,
-                is_tarpit: false,
                 banner_rfc_compliant: true,
                 banner_has_fqdn: true,
-                early_talker_rejected: false,
                 esmtp_supported: true,
                 multiline_format_valid: true,
                 capabilities: vec!["STARTTLS".to_string()],
                 max_message_size_bytes: Some(10485760),
-                auth_mechanisms: Vec::new(),
-                plaintext_auth_offered: false,
                 starttls_advertised: true,
                 pipelining_supported: true,
-                chunking_supported: false,
                 smtputf8_supported: true,
                 null_sender_accepted: Some(true),
                 open_relay_tested: true,
-                open_relay_detected: false,
-                open_relay_response: None,
-                recipient_tested: None,
-                recipient_accepted: None,
-                recipient_response: None,
                 rset_working: true,
                 quit_clean: true,
-                error_message: None,
-                anomalies: Vec::new(),
-                transcript: Vec::new(),
+                ..Default::default()
             };
 
             let anom_count = rng.next_usize(4);
@@ -524,7 +543,11 @@ fn test_fuzz_reporter_all_formats() {
             let tr_count = rng.next_usize(5);
             for _ in 0..tr_count {
                 smtp.transcript.push(TranscriptEntry {
-                    direction: if rng.next_usize(2) == 0 { "->".to_string() } else { "<-".to_string() },
+                    direction: if rng.next_usize(2) == 0 {
+                        "->".to_string()
+                    } else {
+                        "<-".to_string()
+                    },
                     timestamp: "12:34:56.789".to_string(),
                     text: rng.random_unicode_string_up_to(25),
                 });
@@ -584,7 +607,11 @@ fn test_fuzz_score_calculation() {
 
         res.calculate_score();
 
-        assert!(res.score >= 0 && res.score <= 100, "Score {} must be within [0, 100]", res.score);
+        assert!(
+            res.score >= 0 && res.score <= 100,
+            "Score {} must be within [0, 100]",
+            res.score
+        );
         assert!(!res.grade.is_empty(), "Grade must not be empty");
 
         if has_critical {
@@ -600,7 +627,12 @@ fn test_fuzz_score_calculation() {
             );
         }
 
-        if check_count == 0 || res.checks.iter().all(|c| c.severity == Severity::Pass || c.severity == Severity::Info) {
+        if check_count == 0
+            || res
+                .checks
+                .iter()
+                .all(|c| c.severity == Severity::Pass || c.severity == Severity::Info)
+        {
             assert_eq!(res.score, 100);
             assert_eq!(res.grade, "A+");
         }

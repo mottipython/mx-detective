@@ -1,6 +1,11 @@
+pub mod diagnose;
 pub mod dns;
 pub mod gui;
 pub mod models;
+pub mod platform;
+pub mod policy;
 pub mod ports;
 pub mod reporter;
 pub mod smtp;
+pub mod summary;
+pub mod tls;

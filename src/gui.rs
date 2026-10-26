@@ -1,13 +1,12 @@
 use eframe::egui;
+use egui_backend_selector::{BackendConfiguration, BackendInterop};
+use egui_software_backend::SoftwareBackendAppConfiguration;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
 
-use crate::dns::DnsResolver;
+use crate::diagnose::{self, DiagnosticOptions};
 use crate::models::{DiagnosticResult, Severity};
-use crate::ports::PortProber;
 use crate::reporter::DiagnosticReporter;
-use crate::smtp::SmtpProber;
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum ThemeMode {
@@ -20,6 +19,7 @@ pub enum ThemeMode {
 enum AppTab {
     Overview,
     SmtpBehavior,
+    Servers,
     DnsRecords,
     Ports,
     Transcript,
@@ -30,7 +30,10 @@ pub struct MxDetectiveApp {
     host_override: String,
     port_input: String,
     recipient_input: String,
+    dkim_selector_input: String,
     test_relay: bool,
+    primary_only: bool,
+    transcript_server: std::cell::Cell<usize>,
     active_tab: AppTab,
     theme_mode: ThemeMode,
     is_running: bool,
@@ -45,12 +48,14 @@ pub struct MxDetectiveApp {
 
 enum DiagnosticMessage {
     Status(String),
-    Complete(DiagnosticResult),
+    Complete(Box<DiagnosticResult>),
 }
 
 fn open_in_system(target: &str) {
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/C", "start", "", target]).spawn();
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", target])
+        .spawn();
 
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(target).spawn();
@@ -67,7 +72,10 @@ impl MxDetectiveApp {
             host_override: String::new(),
             port_input: "25".to_string(),
             recipient_input: String::new(),
+            dkim_selector_input: String::new(),
             test_relay: true,
+            primary_only: false,
+            transcript_server: std::cell::Cell::new(0),
             active_tab: AppTab::Overview,
             theme_mode: ThemeMode::Dark,
             is_running: false,
@@ -97,7 +105,7 @@ impl MxDetectiveApp {
         thread::spawn(move || {
             let dialog = rfd::FileDialog::new()
                 .set_file_name(&default_name)
-                .set_title(&format!("Save {} Report", filter_name))
+                .set_title(format!("Save {} Report", filter_name))
                 .add_filter(filter_name, &[ext]);
 
             if let Some(path_buf) = dialog.save_file() {
@@ -139,30 +147,54 @@ impl MxDetectiveApp {
     }
 
     fn render_export_menu(&self, ui: &mut egui::Ui, res: &DiagnosticResult) {
-        if ui.button("🌐 HTML Report (.html)...").on_hover_text("Open file dialog to save interactive HTML report").clicked() {
+        if ui
+            .button("🌐 HTML Report (.html)...")
+            .on_hover_text("Open file dialog to save interactive HTML report")
+            .clicked()
+        {
             self.export_with_dialog(res, "html", "HTML");
-            ui.close_menu();
+            ui.close();
         }
-        if ui.button("📝 Markdown Report (.md)...").on_hover_text("Open file dialog to save Markdown report").clicked() {
+        if ui
+            .button("📝 Markdown Report (.md)...")
+            .on_hover_text("Open file dialog to save Markdown report")
+            .clicked()
+        {
             self.export_with_dialog(res, "md", "Markdown");
-            ui.close_menu();
+            ui.close();
         }
-        if ui.button("📊 CSV Spreadsheet (.csv)...").on_hover_text("Open file dialog to save CSV diagnostic data").clicked() {
+        if ui
+            .button("📊 CSV Spreadsheet (.csv)...")
+            .on_hover_text("Open file dialog to save CSV diagnostic data")
+            .clicked()
+        {
             self.export_with_dialog(res, "csv", "CSV");
-            ui.close_menu();
+            ui.close();
         }
-        if ui.button("📋 JSON Data (.json)...").on_hover_text("Open file dialog to save structured JSON").clicked() {
+        if ui
+            .button("📋 JSON Data (.json)...")
+            .on_hover_text("Open file dialog to save structured JSON")
+            .clicked()
+        {
             self.export_with_dialog(res, "json", "JSON");
-            ui.close_menu();
+            ui.close();
         }
-        if ui.button("📄 Plain Text (.txt)...").on_hover_text("Open file dialog to save plain ASCII text report").clicked() {
+        if ui
+            .button("📄 Plain Text (.txt)...")
+            .on_hover_text("Open file dialog to save plain ASCII text report")
+            .clicked()
+        {
             self.export_with_dialog(res, "txt", "Plain Text");
-            ui.close_menu();
+            ui.close();
         }
         ui.separator();
-        if ui.button("⚡ Quick Export All to ~/Downloads").on_hover_text("Quickly saves HTML, MD, CSV, JSON, and TXT directly to ~/Downloads").clicked() {
+        if ui
+            .button("⚡ Quick Export All to ~/Downloads")
+            .on_hover_text("Quickly saves HTML, MD, CSV, JSON, and TXT directly to ~/Downloads")
+            .clicked()
+        {
             self.quick_export_downloads(res);
-            ui.close_menu();
+            ui.close();
         }
     }
 
@@ -186,88 +218,41 @@ impl MxDetectiveApp {
         } else {
             Some(self.recipient_input.trim().to_string())
         };
-        let test_relay = self.test_relay;
+        let opts = DiagnosticOptions {
+            domain,
+            host_override,
+            port,
+            recipient,
+            test_relay: self.test_relay,
+            dkim_selector: Some(self.dkim_selector_input.trim().to_string()).filter(|s| !s.is_empty()),
+            primary_only: self.primary_only,
+            ..Default::default()
+        };
+        self.transcript_server.set(0);
 
         let (tx, rx): (Sender<DiagnosticMessage>, Receiver<DiagnosticMessage>) = channel();
         self.rx = Some(rx);
 
         thread::spawn(move || {
-            let _ = tx.send(DiagnosticMessage::Status(format!("Querying DNS MX records for {}...", domain)));
-            let dns_resolver = DnsResolver::new(Duration::from_secs(4));
-            let (dns_report, dns_checks) = dns_resolver.resolve_all(&domain, None);
-
-            let mut result = DiagnosticResult::new(domain.clone(), host_override.clone());
-            result.dns = Some(dns_report.clone());
-            for c in dns_checks {
-                result.checks.push(c);
-            }
-
-            // Determine target host
-            let target_host = if let Some(h) = host_override {
-                Some(h)
-            } else if let Some(first_mx) = dns_report.mx_hosts.first() {
-                Some(first_mx.hostname.clone())
-            } else if dns_report.fallback_to_a {
-                Some(domain.clone())
-            } else {
-                None
-            };
-
-            result.target_host = target_host.clone();
-
-            let target_ip = if let Some(th) = &target_host {
-                dns_report
-                    .mx_hosts
-                    .iter()
-                    .find(|h| &h.hostname == th)
-                    .and_then(|h| h.ipv4_addresses.first().cloned())
-            } else {
-                None
-            };
-            result.target_ip = target_ip;
-
-            if let Some(host) = target_host {
-                let _ = tx.send(DiagnosticMessage::Status(format!("Probing mail ports on {}...", host)));
-                let port_prober = PortProber::new(Duration::from_secs(4));
-                let (probes, port_checks, p25_blocked) = port_prober.probe_mail_ports(&host);
-                result.port_probes = probes;
-                result.port_25_blocked_suspected = p25_blocked;
-                for c in port_checks {
-                    result.checks.push(c);
-                }
-
-                let _ = tx.send(DiagnosticMessage::Status(format!("Connecting to SMTP on {}:{} to inspect responses...", host, port)));
-                let smtp_prober = SmtpProber::new(Duration::from_secs(5));
-                let (smtp_report, tls_report, smtp_checks) = smtp_prober.probe_server(
-                    &host,
-                    port,
-                    test_relay,
-                    recipient.as_deref(),
-                    true,
-                );
-                result.smtp = Some(smtp_report);
-                result.tls = tls_report;
-                for c in smtp_checks {
-                    result.checks.push(c);
-                }
-            }
-
-            result.calculate_score();
-            let _ = tx.send(DiagnosticMessage::Complete(result));
+            let status_tx = tx.clone();
+            let result = diagnose::run(&opts, &move |msg| {
+                let _ = status_tx.send(DiagnosticMessage::Status(msg.to_string()));
+            });
+            let _ = tx.send(DiagnosticMessage::Complete(Box::new(result)));
         });
     }
 }
 
-impl eframe::App for MxDetectiveApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Apply theme mode
+impl egui_backend_selector::App for MxDetectiveApp {
+    fn ui(&mut self, root: &mut egui::Ui, _backend: BackendInterop<'_>) {
+        let ctx = root.ctx().clone();
+        let ctx = &ctx;
         match self.theme_mode {
             ThemeMode::Dark => ctx.set_visuals(egui::Visuals::dark()),
             ThemeMode::Light => ctx.set_visuals(egui::Visuals::light()),
             ThemeMode::System => {}
         }
 
-        // Poll background task messages
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
@@ -276,14 +261,13 @@ impl eframe::App for MxDetectiveApp {
                     }
                     DiagnosticMessage::Complete(res) => {
                         self.status_text = format!("Diagnostic complete. Score: {}/100 ({})", res.score, res.grade);
-                        self.result = Some(res);
+                        self.result = Some(*res);
                         self.is_running = false;
                     }
                 }
             }
         }
 
-        // Poll background export results
         while let Ok(msg) = self.rx_export.try_recv() {
             match msg {
                 Ok(path) => {
@@ -296,10 +280,9 @@ impl eframe::App for MxDetectiveApp {
             }
         }
 
-        let is_dark = ctx.style().visuals.dark_mode;
+        let is_dark = ctx.global_style().visuals.dark_mode;
 
-        // Top Control Panel
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        egui::Panel::top("top_panel").show_inside(root, |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.heading("🕵 MX Detective");
@@ -316,7 +299,11 @@ impl eframe::App for MxDetectiveApp {
                         ThemeMode::Light => ("☀", "Light"),
                         ThemeMode::System => ("🖥", "System"),
                     };
-                    if ui.button(format!("{} {}", icon, label)).on_hover_text("Toggle Theme (Dark / Light / System)").clicked() {
+                    if ui
+                        .button(format!("{} {}", icon, label))
+                        .on_hover_text("Toggle Theme (Dark / Light / System)")
+                        .clicked()
+                    {
                         self.theme_mode = match self.theme_mode {
                             ThemeMode::Dark => ThemeMode::Light,
                             ThemeMode::Light => ThemeMode::System,
@@ -327,30 +314,58 @@ impl eframe::App for MxDetectiveApp {
             });
             ui.add_space(8.0);
 
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Domain:");
-                let domain_box = ui.add(egui::TextEdit::singleline(&mut self.domain_input).hint_text("e.g. google.com").desired_width(180.0));
+                let domain_box = ui.add(
+                    egui::TextEdit::singleline(&mut self.domain_input)
+                        .hint_text("e.g. google.com")
+                        .desired_width(180.0),
+                );
                 if domain_box.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
                     self.run_diagnostic();
                 }
 
                 ui.label("Host Override:");
-                ui.add(egui::TextEdit::singleline(&mut self.host_override).hint_text("Optional MX host").desired_width(160.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.host_override)
+                        .hint_text("Optional MX host")
+                        .desired_width(160.0),
+                );
 
                 ui.label("Port:");
                 ui.add(egui::TextEdit::singleline(&mut self.port_input).desired_width(45.0));
 
                 ui.label("Recipient Probe:");
-                ui.add(egui::TextEdit::singleline(&mut self.recipient_input).hint_text("user@domain.com").desired_width(150.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.recipient_input)
+                        .hint_text("user@domain.com")
+                        .desired_width(150.0),
+                );
+
+                ui.label("DKIM Selector:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.dkim_selector_input)
+                        .hint_text("optional, comma-separated")
+                        .desired_width(80.0),
+                );
 
                 ui.checkbox(&mut self.test_relay, "Open Relay Test");
+                ui.checkbox(&mut self.primary_only, "Primary MX only")
+                    .on_hover_text("Test only the most preferred MX host instead of every address of every MX host");
 
                 ui.add_space(10.0);
                 if self.is_running {
                     ui.add(egui::Spinner::new());
                     ui.label(egui::RichText::new(&self.status_text).color(egui::Color32::from_rgb(96, 165, 250)));
                 } else {
-                    if ui.button(egui::RichText::new("🔍 Inspect MX").strong().color(egui::Color32::WHITE)).clicked() {
+                    if ui
+                        .button(
+                            egui::RichText::new("🔍 Inspect MX")
+                                .strong()
+                                .color(egui::Color32::WHITE),
+                        )
+                        .clicked()
+                    {
                         self.run_diagnostic();
                     }
 
@@ -367,7 +382,11 @@ impl eframe::App for MxDetectiveApp {
 
             if !self.is_running {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&self.status_text).small().color(egui::Color32::from_rgb(148, 163, 184)));
+                    ui.label(
+                        egui::RichText::new(&self.status_text)
+                            .small()
+                            .color(egui::Color32::from_rgb(148, 163, 184)),
+                    );
                 });
             }
 
@@ -393,23 +412,35 @@ impl eframe::App for MxDetectiveApp {
                     )
                 };
 
-                egui::Frame::none()
+                egui::Frame::new()
                     .fill(bg_color)
                     .stroke(egui::Stroke::new(1.0_f32, border_color))
-                    .rounding(4.0)
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                    .corner_radius(4.0)
+                    .inner_margin(egui::Margin::symmetric(8, 4))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let icon = if *is_error { "❌" } else { "✓" };
-                            ui.label(egui::RichText::new(format!("{} {}", icon, msg)).strong().color(text_color));
+                            ui.label(
+                                egui::RichText::new(format!("{} {}", icon, msg))
+                                    .strong()
+                                    .color(text_color),
+                            );
 
                             if let Some(path) = &self.last_exported_path {
-                                if ui.button("📂 Open Folder").on_hover_text("Open containing folder in file manager").clicked() {
+                                if ui
+                                    .button("📂 Open Folder")
+                                    .on_hover_text("Open containing folder in file manager")
+                                    .clicked()
+                                {
                                     if let Some(parent) = std::path::Path::new(path).parent() {
                                         open_in_system(&parent.to_string_lossy());
                                     }
                                 }
-                                if ui.button("📄 View File").on_hover_text("Open file in default viewer").clicked() {
+                                if ui
+                                    .button("📄 View File")
+                                    .on_hover_text("Open file in default viewer")
+                                    .clicked()
+                                {
                                     open_in_system(path);
                                 }
                             }
@@ -419,10 +450,14 @@ impl eframe::App for MxDetectiveApp {
 
             ui.add_space(4.0);
 
-            // Tab bar
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, AppTab::Overview, "📋 Overview & Findings");
-                ui.selectable_value(&mut self.active_tab, AppTab::SmtpBehavior, "⚡ SMTP Behavior & Anomalies");
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    AppTab::SmtpBehavior,
+                    "⚡ SMTP Behavior & Anomalies",
+                );
+                ui.selectable_value(&mut self.active_tab, AppTab::Servers, "🔒 Servers & TLS");
                 ui.selectable_value(&mut self.active_tab, AppTab::DnsRecords, "🌐 DNS & Reverse DNS");
                 ui.selectable_value(&mut self.active_tab, AppTab::Ports, "🔌 Port Reachability");
                 ui.selectable_value(&mut self.active_tab, AppTab::Transcript, "📜 Raw Transcript");
@@ -438,10 +473,8 @@ impl eframe::App for MxDetectiveApp {
             ui.add_space(4.0);
         });
 
-        // Main Content Area
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(root, |ui| {
             if let Some(res) = &self.result {
-                // Score Header Bar
                 ui.horizontal(|ui| {
                     let score_color = match res.grade.as_str() {
                         "A+" | "A" => egui::Color32::from_rgb(16, 185, 129),
@@ -483,6 +516,9 @@ impl eframe::App for MxDetectiveApp {
                         AppTab::SmtpBehavior => {
                             self.render_smtp_behavior_tab(ui, res);
                         }
+                        AppTab::Servers => {
+                            self.render_servers_tab(ui, res);
+                        }
                         AppTab::DnsRecords => {
                             self.render_dns_tab(ui, res);
                         }
@@ -498,7 +534,7 @@ impl eframe::App for MxDetectiveApp {
                 ui.vertical_centered(|ui| {
                     ui.add_space(80.0);
                     ui.heading("Enter a domain above and click 'Inspect MX'");
-                    ui.label(egui::RichText::new("Tests DNS MX records, TCP connectivity, anti-spam tarpitting, SMTP multiline compliance, STARTTLS encryption, and safe open-relay testing.").color(egui::Color32::from_rgb(148, 163, 184)));
+                    ui.label(egui::RichText::new("Tests every MX server over IPv4 and IPv6: SMTP behavior, real TLS certificates, DANE, MTA-STS, SPF/DMARC/DKIM, blocklists and open relays.").color(egui::Color32::from_rgb(148, 163, 184)));
                 });
             }
         });
@@ -524,17 +560,45 @@ impl MxDetectiveApp {
 
         for c in &res.checks {
             let color = match c.severity {
-                Severity::Pass => if is_dark { egui::Color32::from_rgb(52, 211, 153) } else { egui::Color32::from_rgb(5, 150, 105) },
-                Severity::Notice => if is_dark { egui::Color32::from_rgb(96, 165, 250) } else { egui::Color32::from_rgb(29, 78, 216) },
-                Severity::Warning => if is_dark { egui::Color32::from_rgb(251, 191, 36) } else { egui::Color32::from_rgb(217, 119, 6) },
-                Severity::Critical => if is_dark { egui::Color32::from_rgb(248, 113, 113) } else { egui::Color32::from_rgb(220, 38, 38) },
+                Severity::Pass => {
+                    if is_dark {
+                        egui::Color32::from_rgb(52, 211, 153)
+                    } else {
+                        egui::Color32::from_rgb(5, 150, 105)
+                    }
+                }
+                Severity::Notice => {
+                    if is_dark {
+                        egui::Color32::from_rgb(96, 165, 250)
+                    } else {
+                        egui::Color32::from_rgb(29, 78, 216)
+                    }
+                }
+                Severity::Warning => {
+                    if is_dark {
+                        egui::Color32::from_rgb(251, 191, 36)
+                    } else {
+                        egui::Color32::from_rgb(217, 119, 6)
+                    }
+                }
+                Severity::Critical => {
+                    if is_dark {
+                        egui::Color32::from_rgb(248, 113, 113)
+                    } else {
+                        egui::Color32::from_rgb(220, 38, 38)
+                    }
+                }
                 Severity::Info => cat_color,
             };
 
             ui.group(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(c.severity.badge()).strong().color(color));
-                    ui.label(egui::RichText::new(format!("[{}]", c.category)).small().color(cat_color));
+                    ui.label(
+                        egui::RichText::new(format!("[{}]", c.category))
+                            .small()
+                            .color(cat_color),
+                    );
                     ui.label(egui::RichText::new(&c.title).strong());
                 });
                 ui.label(&c.message);
@@ -551,18 +615,36 @@ impl MxDetectiveApp {
             ui.heading("SMTP Server Behavior & RFC Compliance Analysis");
             ui.add_space(6.0);
 
-            // Misbehavior Anomalies Box
             if !smtp.anomalies.is_empty() {
-                ui.label(egui::RichText::new(format!("⚠ {} Protocol Misbehaviors / RFC Violations Detected:", smtp.anomalies.len())).heading().color(egui::Color32::from_rgb(239, 68, 68)));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "⚠ {} Protocol Misbehaviors / RFC Violations Detected:",
+                        smtp.anomalies.len()
+                    ))
+                    .heading()
+                    .color(egui::Color32::from_rgb(239, 68, 68)),
+                );
                 ui.add_space(4.0);
                 for a in &smtp.anomalies {
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&a.rfc_reference).strong().color(egui::Color32::WHITE));
-                            ui.label(egui::RichText::new(&a.title).strong().color(egui::Color32::from_rgb(248, 113, 113)));
+                            ui.label(
+                                egui::RichText::new(&a.rfc_reference)
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            );
+                            ui.label(
+                                egui::RichText::new(&a.title)
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(248, 113, 113)),
+                            );
                         });
                         ui.label(&a.description);
-                        ui.label(egui::RichText::new(format!("Raw: {}", a.raw_response)).monospace().small());
+                        ui.label(
+                            egui::RichText::new(format!("Raw: {}", a.raw_response))
+                                .monospace()
+                                .small(),
+                        );
                     });
                     ui.add_space(4.0);
                 }
@@ -571,7 +653,11 @@ impl MxDetectiveApp {
 
             ui.horizontal(|ui| {
                 ui.label("Banner Response Time:");
-                let tarpit_label = if smtp.is_tarpit { " (Tarpit / Delay Detected!)" } else { " (Normal)" };
+                let tarpit_label = if smtp.is_tarpit {
+                    " (Tarpit / Delay Detected!)"
+                } else {
+                    " (Normal)"
+                };
                 ui.label(egui::RichText::new(format!("{:.0} ms{}", smtp.banner_time_ms, tarpit_label)).strong());
             });
 
@@ -583,9 +669,11 @@ impl MxDetectiveApp {
             ui.horizontal(|ui| {
                 ui.label("Open Relay Status:");
                 let relay_text = if smtp.open_relay_detected {
-                    egui::RichText::new("CRITICAL VULNERABILITY: OPEN RELAY DETECTED").strong().color(egui::Color32::from_rgb(239, 68, 68))
+                    egui::RichText::new("Open relay detected")
+                        .strong()
+                        .color(egui::Color32::from_rgb(239, 68, 68))
                 } else {
-                    egui::RichText::new("Safe (Relay Access Denied)").color(egui::Color32::from_rgb(52, 211, 153))
+                    egui::RichText::new("Relay denied").color(egui::Color32::from_rgb(52, 211, 153))
                 };
                 ui.label(relay_text);
             });
@@ -601,7 +689,11 @@ impl MxDetectiveApp {
             ui.label(egui::RichText::new("Advertised ESMTP Capabilities:").strong());
             ui.horizontal_wrapped(|ui| {
                 for cap in &smtp.capabilities {
-                    ui.label(egui::RichText::new(cap).monospace().background_color(egui::Color32::from_rgb(30, 41, 59)));
+                    ui.label(
+                        egui::RichText::new(cap)
+                            .monospace()
+                            .background_color(egui::Color32::from_rgb(30, 41, 59)),
+                    );
                 }
             });
         } else {
@@ -615,22 +707,36 @@ impl MxDetectiveApp {
             ui.add_space(6.0);
 
             ui.label(egui::RichText::new("Mail Exchangers (MX Records):").strong());
-            egui::Grid::new("mx_grid").striped(true).min_col_width(80.0).show(ui, |ui| {
-                ui.label(egui::RichText::new("Priority").strong());
-                ui.label(egui::RichText::new("Hostname").strong());
-                ui.label(egui::RichText::new("IPv4 Address").strong());
-                ui.label(egui::RichText::new("Reverse DNS (PTR)").strong());
-                ui.end_row();
-
-                for mx in &dns.mx_hosts {
-                    ui.label(mx.priority.to_string());
-                    ui.label(&mx.hostname);
-                    ui.label(mx.ipv4_addresses.join(", "));
-                    let ptrs: Vec<String> = mx.ptr_records.values().flatten().cloned().collect();
-                    ui.label(if ptrs.is_empty() { "No PTR".to_string() } else { ptrs.join(", ") });
+            egui::Grid::new("mx_grid")
+                .striped(true)
+                .min_col_width(80.0)
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Priority").strong());
+                    ui.label(egui::RichText::new("Hostname").strong());
+                    ui.label(egui::RichText::new("Addresses").strong());
+                    ui.label(egui::RichText::new("Reverse DNS (PTR)").strong());
                     ui.end_row();
-                }
-            });
+
+                    for mx in &dns.mx_hosts {
+                        ui.label(mx.priority.to_string());
+                        ui.label(&mx.hostname);
+                        ui.label(
+                            mx.ipv4_addresses
+                                .iter()
+                                .chain(mx.ipv6_addresses.iter())
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        );
+                        let ptrs: Vec<String> = mx.ptr_records.values().flatten().cloned().collect();
+                        ui.label(if ptrs.is_empty() {
+                            "No PTR".to_string()
+                        } else {
+                            ptrs.join(", ")
+                        });
+                        ui.end_row();
+                    }
+                });
 
             ui.add_space(10.0);
             ui.label(egui::RichText::new("Email Authentication:").strong());
@@ -644,8 +750,115 @@ impl MxDetectiveApp {
             });
             ui.horizontal(|ui| {
                 ui.label("DKIM Record:");
-                ui.label(egui::RichText::new(dns.dkim_record.as_deref().unwrap_or("None")).monospace());
+                ui.label(
+                    egui::RichText::new(if dns.dkim_keys.is_empty() {
+                        "None found".to_string()
+                    } else {
+                        dns.dkim_keys
+                            .iter()
+                            .map(|k| format!("{} ({})", k.selector, k.describe()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .monospace(),
+                );
             });
+            ui.horizontal(|ui| {
+                ui.label("SPF DNS Lookups:");
+                ui.label(
+                    egui::RichText::new(format!("{} of 10 (whole include tree)", dns.spf_lookup_count)).monospace(),
+                );
+            });
+
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("Transport Security:").strong());
+            let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                ui.horizontal(|ui| {
+                    ui.label(k);
+                    ui.label(egui::RichText::new(v).monospace());
+                });
+            };
+            row(
+                ui,
+                "DNSSEC:",
+                match dns.dnssec_signed {
+                    Some(true) => "Signed and validated",
+                    Some(false) => "Not signed",
+                    None => "Unknown",
+                }
+                .to_string(),
+            );
+            match &dns.mta_sts {
+                Some(sts) => {
+                    row(ui, "MTA-STS TXT:", sts.txt_record.clone().unwrap_or_default());
+                    row(
+                        ui,
+                        "MTA-STS Policy:",
+                        if sts.policy_fetched {
+                            format!(
+                                "mode={} max_age={} mx={}",
+                                sts.mode.as_deref().unwrap_or("?"),
+                                sts.max_age.map(|a| a.to_string()).unwrap_or_else(|| "?".into()),
+                                sts.mx_patterns.join(", ")
+                            )
+                        } else {
+                            format!("fetch failed: {}", sts.fetch_error.as_deref().unwrap_or("?"))
+                        },
+                    );
+                }
+                None => row(ui, "MTA-STS:", "Not configured".to_string()),
+            }
+            row(
+                ui,
+                "TLS-RPT:",
+                dns.tls_rpt_record.clone().unwrap_or_else(|| "None".into()),
+            );
+            row(ui, "BIMI:", dns.bimi_record.clone().unwrap_or_else(|| "None".into()));
+            for mx in dns.mx_hosts.iter().filter(|h| !h.tlsa_records.is_empty()) {
+                let recs: Vec<String> = mx
+                    .tlsa_records
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{} {} {} {}…",
+                            t.usage,
+                            t.selector,
+                            t.matching_type,
+                            &t.data_hex[..t.data_hex.len().min(16)]
+                        )
+                    })
+                    .collect();
+                row(
+                    ui,
+                    &format!("TLSA {}:", mx.hostname),
+                    format!(
+                        "{}{}",
+                        recs.join(" | "),
+                        if mx.tlsa_dnssec_valid == Some(true) {
+                            " (DNSSEC ok)"
+                        } else {
+                            " (NOT DNSSEC-validated)"
+                        }
+                    ),
+                );
+            }
+
+            if !dns.dnsbl.is_empty() {
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Blocklists:").strong());
+                egui::Grid::new("dnsbl_grid").striped(true).show(ui, |ui| {
+                    for r in &dns.dnsbl {
+                        ui.label(&r.ip);
+                        ui.label(&r.list);
+                        ui.label(match r.listed {
+                            Some(true) => format!("LISTED {}", r.return_codes.join(",")),
+                            Some(false) => "clean".into(),
+                            None => r.meaning.clone().unwrap_or_else(|| "unknown".into()),
+                        });
+                        ui.end_row();
+                    }
+                });
+            }
         }
     }
 
@@ -653,59 +866,220 @@ impl MxDetectiveApp {
         ui.heading("Port Connectivity & Handshake Latency");
         ui.add_space(6.0);
 
-        egui::Grid::new("ports_grid").striped(true).min_col_width(100.0).show(ui, |ui| {
-            ui.label(egui::RichText::new("Port").strong());
-            ui.label(egui::RichText::new("Service").strong());
-            ui.label(egui::RichText::new("Status").strong());
-            ui.label(egui::RichText::new("Latency").strong());
-            ui.label(egui::RichText::new("Details").strong());
-            ui.end_row();
+        egui::Grid::new("ports_grid")
+            .striped(true)
+            .min_col_width(100.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Port").strong());
+                ui.label(egui::RichText::new("Service").strong());
+                ui.label(egui::RichText::new("Status").strong());
+                ui.label(egui::RichText::new("Latency").strong());
+                ui.label(egui::RichText::new("Details").strong());
+                ui.end_row();
 
-            for p in &res.port_probes {
-                ui.label(p.port.to_string());
-                ui.label(&p.service);
-                if p.reachable {
-                    ui.label(egui::RichText::new("OPEN").strong().color(egui::Color32::from_rgb(52, 211, 153)));
-                    ui.label(format!("{:.0} ms", p.latency_ms));
-                    ui.label("Connected successfully");
-                } else {
-                    ui.label(egui::RichText::new("CLOSED / TIMEOUT").strong().color(egui::Color32::from_rgb(248, 113, 113)));
-                    ui.label("-");
-                    ui.label(p.error.as_deref().unwrap_or("Unreachable"));
+                for p in &res.port_probes {
+                    ui.label(p.port.to_string());
+                    ui.label(&p.service);
+                    if p.reachable {
+                        ui.label(
+                            egui::RichText::new("OPEN")
+                                .strong()
+                                .color(egui::Color32::from_rgb(52, 211, 153)),
+                        );
+                        ui.label(format!("{:.0} ms", p.latency_ms));
+                        ui.label("Connected successfully");
+                    } else {
+                        ui.label(
+                            egui::RichText::new("CLOSED / TIMEOUT")
+                                .strong()
+                                .color(egui::Color32::from_rgb(248, 113, 113)),
+                        );
+                        ui.label("-");
+                        ui.label(p.error.as_deref().unwrap_or("Unreachable"));
+                    }
+                    ui.end_row();
+                }
+            });
+    }
+
+    fn render_servers_tab(&self, ui: &mut egui::Ui, res: &DiagnosticResult) {
+        let is_dark = ui.visuals().dark_mode;
+        let good = if is_dark {
+            egui::Color32::from_rgb(52, 211, 153)
+        } else {
+            egui::Color32::from_rgb(5, 150, 105)
+        };
+        let warn = if is_dark {
+            egui::Color32::from_rgb(251, 191, 36)
+        } else {
+            egui::Color32::from_rgb(217, 119, 6)
+        };
+        let bad = if is_dark {
+            egui::Color32::from_rgb(248, 113, 113)
+        } else {
+            egui::Color32::from_rgb(220, 38, 38)
+        };
+
+        ui.heading("Every MX Address Tested");
+        ui.add_space(6.0);
+        if res.servers.is_empty() {
+            ui.label("No SMTP servers were tested.");
+            return;
+        }
+        egui::Grid::new("servers_grid")
+            .striped(true)
+            .min_col_width(60.0)
+            .show(ui, |ui| {
+                for h in [
+                    "Pref",
+                    "Host",
+                    "Address",
+                    "SMTP",
+                    "STARTTLS",
+                    "TLS",
+                    "Certificate",
+                    "Expires",
+                    "DANE",
+                ] {
+                    ui.label(egui::RichText::new(h).strong());
                 }
                 ui.end_row();
-            }
-        });
+                for s in &res.servers {
+                    ui.label(s.priority.to_string());
+                    ui.label(&s.hostname);
+                    ui.label(egui::RichText::new(&s.ip).monospace());
+                    if s.smtp.connected {
+                        ui.label(egui::RichText::new(format!("OK ({:.0} ms)", s.smtp.banner_time_ms)).color(good));
+                    } else {
+                        ui.label(egui::RichText::new("Unreachable").color(bad))
+                            .on_hover_text(s.smtp.error_message.as_deref().unwrap_or(""));
+                    }
+                    ui.label(if s.smtp.starttls_advertised {
+                        egui::RichText::new("Offered").color(good)
+                    } else if s.smtp.connected {
+                        egui::RichText::new("No").color(warn)
+                    } else {
+                        egui::RichText::new("-")
+                    });
+                    match &s.tls {
+                        Some(t) if t.handshake_success => {
+                            ui.label(t.tls_version.clone().unwrap_or_default())
+                                .on_hover_text(t.cipher_name.clone().unwrap_or_default());
+                            let cert = if t.chain_verified {
+                                egui::RichText::new("Trusted").color(good)
+                            } else {
+                                egui::RichText::new("Not trusted").color(warn)
+                            };
+                            ui.label(cert).on_hover_text(format!(
+                                "CN: {}\nIssuer: {}\nSANs: {}\nSHA-256: {}{}",
+                                t.cert_subject_cn.as_deref().unwrap_or("?"),
+                                t.cert_issuer.as_deref().unwrap_or("?"),
+                                t.cert_sans.join(", "),
+                                t.cert_sha256.as_deref().unwrap_or("?"),
+                                t.verify_error
+                                    .as_ref()
+                                    .map(|e| format!("\nProblem: {}", e))
+                                    .unwrap_or_default()
+                            ));
+                            let days = t.cert_days_left.unwrap_or(0);
+                            let color = if days < 14 {
+                                bad
+                            } else if days < 30 {
+                                warn
+                            } else {
+                                good
+                            };
+                            ui.label(egui::RichText::new(format!("{} days", days)).color(color))
+                                .on_hover_text(t.cert_not_after.clone().unwrap_or_default());
+                            ui.label(t.dane_status.clone().unwrap_or_else(|| "-".to_string()));
+                        }
+                        Some(t) => {
+                            ui.label(egui::RichText::new("Failed").color(bad))
+                                .on_hover_text(t.error_message.clone().unwrap_or_default());
+                            ui.label("-");
+                            ui.label("-");
+                            ui.label("-");
+                        }
+                        None => {
+                            for _ in 0..4 {
+                                ui.label("-");
+                            }
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
     }
 
     fn render_transcript_tab(&self, ui: &mut egui::Ui, res: &DiagnosticResult) {
+        let sessions: Vec<(String, &crate::models::SmtpReport)> = if res.servers.is_empty() {
+            res.smtp.iter().map(|s| (s.host.clone(), s)).collect()
+        } else {
+            res.servers
+                .iter()
+                .map(|s| (format!("{} ({})", s.hostname, s.ip), &s.smtp))
+                .collect()
+        };
+        let mut idx = self.transcript_server.get().min(sessions.len().saturating_sub(1));
+
         ui.horizontal(|ui| {
             ui.heading("Raw SMTP Packet Transcript");
-            if ui.button("📋 Copy to Clipboard").clicked() {
-                if let Some(smtp) = &res.smtp {
+            if sessions.len() > 1 {
+                egui::ComboBox::from_id_salt("transcript_server")
+                    .selected_text(sessions[idx].0.clone())
+                    .show_ui(ui, |ui| {
+                        for (i, (label, _)) in sessions.iter().enumerate() {
+                            ui.selectable_value(&mut idx, i, label);
+                        }
+                    });
+            }
+            if let Some((_, smtp)) = sessions.get(idx) {
+                if ui.button("📋 Copy to Clipboard").clicked() {
                     let text = smtp
                         .transcript
                         .iter()
                         .map(|t| format!("{} {} {}", t.timestamp, t.direction, t.text))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    ui.output_mut(|o| o.copied_text = text);
+                    ui.ctx().copy_text(text);
                 }
             }
         });
+        self.transcript_server.set(idx);
         ui.add_space(4.0);
 
         let is_dark = ui.visuals().dark_mode;
-        let time_color = if is_dark { egui::Color32::from_rgb(100, 116, 139) } else { egui::Color32::from_rgb(148, 163, 184) };
+        let time_color = if is_dark {
+            egui::Color32::from_rgb(100, 116, 139)
+        } else {
+            egui::Color32::from_rgb(148, 163, 184)
+        };
 
-        if let Some(smtp) = &res.smtp {
+        if let Some((_, smtp)) = sessions.get(idx) {
             for t in &smtp.transcript {
                 let color = match t.direction.as_str() {
-                    "->" => if is_dark { egui::Color32::from_rgb(96, 165, 250) } else { egui::Color32::from_rgb(29, 78, 216) },
-                    "<-" => if is_dark { egui::Color32::from_rgb(52, 211, 153) } else { egui::Color32::from_rgb(5, 150, 105) },
-                    _ => if is_dark { egui::Color32::from_rgb(148, 163, 184) } else { egui::Color32::from_rgb(100, 116, 139) },
+                    "->" => {
+                        if is_dark {
+                            egui::Color32::from_rgb(96, 165, 250)
+                        } else {
+                            egui::Color32::from_rgb(29, 78, 216)
+                        }
+                    }
+                    "<-" => {
+                        if is_dark {
+                            egui::Color32::from_rgb(52, 211, 153)
+                        } else {
+                            egui::Color32::from_rgb(5, 150, 105)
+                        }
+                    }
+                    _ => {
+                        if is_dark {
+                            egui::Color32::from_rgb(148, 163, 184)
+                        } else {
+                            egui::Color32::from_rgb(100, 116, 139)
+                        }
+                    }
                 };
-
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&t.timestamp).small().color(time_color));
                     ui.label(egui::RichText::new(&t.direction).strong().color(color));
@@ -718,27 +1092,29 @@ impl MxDetectiveApp {
     }
 }
 
-pub fn launch_gui(initial_domain: Option<String>) -> Result<(), eframe::Error> {
-    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")).ok();
-
+/// Opens the window. Uses OpenGL where it works and falls back to a CPU renderer on remote
+/// desktop sessions, virtual machines and machines without graphics drivers.
+pub fn launch_gui(initial_domain: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([980.0, 720.0])
         .with_min_inner_size([720.0, 500.0])
         .with_title("MX Detective")
         .with_app_id("mx-detective");
-
-    if let Some(icon) = icon_data {
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")) {
         viewport = viewport.with_icon(icon);
     }
 
-    let options = eframe::NativeOptions {
-        viewport,
+    if std::env::var_os("MX_DETECTIVE_SOFTWARE_RENDER").is_some() {
+        egui_backend_selector::overwrite_backend(egui_backend_selector::Backend::SoftwareBackend);
+    }
+
+    // Caching is off because it renders incorrectly in the software backend (upstream issue 11).
+    let software = SoftwareBackendAppConfiguration {
+        caching: false,
         ..Default::default()
     };
-
-    eframe::run_native(
-        "mx-detective",
-        options,
-        Box::new(|_cc| Ok(Box::new(MxDetectiveApp::new(initial_domain)))),
-    )
+    let config = BackendConfiguration::new(viewport, eframe::NativeOptions::default(), software);
+    egui_backend_selector::run_app("mx-detective", config, move |_ctx, _storage| {
+        MxDetectiveApp::new(initial_domain.clone())
+    })
 }
