@@ -1,276 +1,208 @@
-# 🕵️ MX Detective
+# MX Detective
 
-> **Comprehensive Public MX Server, SMTP Handshake & Protocol Behavior Diagnostic Tool**  
-> Written in high-performance, memory-safe **Rust** with native **GUI** (`egui`/`eframe`) and **CLI** interfaces.  
-> Supports **Light and Dark modes** across both the graphical interface and exported HTML reports.
+Checks a domain's mail setup from the outside: it finds every MX server, connects to each address over IPv4 and IPv6, and reports what a sending server would run into. It has a command-line mode and a desktop window, and exports reports as HTML, Markdown, JSON, CSV or text.
 
-[![Language](https://img.shields.io/badge/Language-Rust-orange.svg)](https://www.rust-lang.org/)
+[![CI](https://github.com/mottipython/mx-detective/actions/workflows/ci.yml/badge.svg)](https://github.com/mottipython/mx-detective/actions/workflows/ci.yml)
+[![Security](https://github.com/mottipython/mx-detective/actions/workflows/security.yml/badge.svg)](https://github.com/mottipython/mx-detective/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Security: Snyk Tested](https://img.shields.io/badge/Security-Snyk%200%20Vulnerabilities-brightgreen.svg)](https://snyk.io/)
-[![Fuzzing: 100k+ Iterations](https://img.shields.io/badge/Fuzzing-100k%2B%20Passed%20(0%20Panics)-brightgreen.svg)](#-fuzz-testing--parser-hardening)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-blue)](https://github.com/mottipython/mx-detective)
-
----
-
-## 📸 Screenshots
 
 | Overview & Health Score | SMTP Behavior & Anomalies |
 |:---:|:---:|
 | ![Main Window](docs/screenshots/01-main-window.png) | ![SMTP Behavior](docs/screenshots/03-smtp-behavior.png) |
 
-| DNS, PTR & Mail Auth (SPF/DMARC) | Port Reachability (25, 587, 465, 2525) |
-|:---:|:---:|
-| ![DNS Records](docs/screenshots/04-dns-records.png) | ![Port Reachability](docs/screenshots/05-port-reachability.png) |
+## Install
 
-| Detailed Findings & Remediation | Full SMTP Protocol Transcript |
-|:---:|:---:|
-| ![Findings Overview](docs/screenshots/02-overview-findings.png) | ![Raw Transcript](docs/screenshots/06-raw-transcript.png) |
+<!-- install:start -->
+Latest release: **v1.0.0**, see the [release page](https://github.com/mottipython/mx-detective/releases/tag/v1.0.0) for notes and checksums. This section is regenerated on every release.
 
----
+**Windows** (PowerShell). Installs the portable executable for your user and adds it to your PATH. No administrator rights needed. Run the same line again to update.
 
-## 🎯 What is MX Detective?
-
-**MX Detective** connects directly to public mail exchanger (MX) servers to diagnose common connection problems and **detect misbehaving, non-compliant, or faulty SMTP responses** that standard email tests overlook. 
-
-Designed for systems administrators, network engineers, IT support specialists, and security auditors who need to pinpoint email delivery failures, firewall blocks, certificate issues, and MTA protocol anomalies.
-
----
-
-## 🎨 Light & Dark Mode Support
-
-MX Detective includes first-class support for both Light and Dark color schemes:
-- **Desktop GUI**: Seamless theme switcher in the navigation bar (🌙 Dark, ☀️ Light, or 🖥 System preference) with optimized contrast palettes for readability.
-- **Exported HTML Reports**: Self-contained reports feature an interactive theme toggle button plus automatic adaptation to your operating system via `@media (prefers-color-scheme: light)` CSS.
-
----
-
-## 🔍 Key Diagnostic Capabilities
-
-### ⚡ Deep SMTP Protocol & Behavior Auditing
-- **Banner Tarpitting & Greeting Delay**: Measures exact millisecond timing before the initial `220` greeting arrives; detects artificial anti-spam tarpits (> 3s) that risk triggering sender MTA timeouts.
-- **RFC 5321 Multiline Formatting**: Validates strict hyphenation (`250-line`) vs space termination (`250 line`), checks for mismatched status codes between lines, and detects bare line feeds (`\n` without `\r`).
-- **Banner FQDN Verification**: Enforces RFC 5321 §4.2 rule requiring the first word of the 220 banner to be the server's fully qualified domain name.
-- **Null Sender Bounce Compliance (`MAIL FROM:<>`)**: Checks if the server accepts `<>` (RFC 5321 §3.6 / RFC 1123 §5.2.9). Servers that reject null senders break Delivery Status Notifications (NDR bounces) and create message loops.
-- **STARTTLS Negotiation & False Advertising**: Detects servers advertising `STARTTLS` in `EHLO` but erroring (`454`/`500`) or dropping connections when executed.
-- **Post-STARTTLS State Reset (RFC 3207 §4.2)**: Verifies that re-issuing `EHLO` after TLS encryption successfully resets session state.
-- **Insecure Plaintext Authentication**: Alerts if `AUTH` mechanisms (`PLAIN`, `LOGIN`) are offered over unencrypted port 25 before TLS is negotiated.
-- **Safe Open Relay Detection**: Probes `RCPT TO:<relay-test@example.net>` without queuing or sending email; detects catastrophic open-relay vulnerabilities.
-- **Message Size Limits**: Parses and converts advertised `SIZE` limits into MB, warning on abnormally restrictive limits (< 5 MB).
-- **Session Teardown**: Verifies that `RSET` properly resets state and `QUIT` cleanly returns `221` without abrupt socket drops.
-
-### 🌐 DNS, Reverse DNS & Mail Authentication
-- **MX Priority & CNAME Check**: Discovers all MX records, sorts by preference, and flags RFC 2181 / RFC 5321 violations (MX host pointing to a CNAME alias).
-- **Null MX Detection (RFC 7505)**: Identifies explicit `MX 0 .` records published by no-mail domains.
-- **Forward-Confirmed Reverse DNS (FCrDNS)**: Validates PTR records for each MX IP and verifies the PTR hostname resolves forward back to the same IP.
-- **SPF Audit**: Audits `v=spf1` syntax, multiple SPF records (RFC 7208 §3.2 PermError), lookup mechanisms count (max 10 limit), deprecated `ptr` tags, and qualifiers (`-all`, `~all`, `?all`, `+all`).
-- **DMARC Audit**: Queries `_dmarc.<domain>`, assesses enforcement policy (`p=reject`, `p=quarantine`, `p=none`), percentage (`pct=`), and aggregate reporting (`rua=`).
-- **DKIM Selector Discovery**: Probes user-specified or common DKIM selectors (`google`, `default`, `k1`, `mail`, `selector1`, etc.).
-
-### 🔌 Port Reachability & Local Firewall Diagnostics
-- **Multi-Port Probe**: Tests ports **25** (SMTP), **587** (Submission), **465** (SMTPS), and **2525** (Alt SMTP).
-- **ISP Port 25 Block Detection**: Accurately detects when outbound TCP port 25 is blocked by residential ISPs (Comcast, AT&T, Spectrum) or cloud firewalls (AWS, Azure, GCP).
-
----
-
-## 📊 Export in Useful Formats
-
-MX Detective generates structured reports tailored for tickets, compliance, and automation:
-
-| Format | File Extension | Use Case |
-|---|---|---|
-| **HTML** | `.html` | Standalone, interactive report with health badges, collapsible transcript, Light/Dark toggle, and print-to-PDF stylesheet |
-| **Markdown** | `.md` | Formatted for GitHub, GitLab, Jira, Confluence, Linear, and Notion tickets |
-| **JSON** | `.json` | Full machine-readable data for CI/CD pipelines, SIEM logging, and API automation |
-| **CSV** | `.csv` | Tabular export of checks, anomalies, and port probes for Excel or LibreOffice Calc |
-| **Plain Text** | `.txt` | Clean ASCII terminal report for email or command-line archiving |
-
----
-
-## 🚀 Installation & Packages
-
-Pre-built binaries and native packages are provided for Linux (RPM, DEB, Arch), Windows, and macOS:
-
-### Fedora / RHEL / Rocky / CentOS (`.rpm`)
-```bash
-sudo rpm -i dist/mx-detective-0.1.0-1.fc44.x86_64.rpm
-# or with dnf:
-sudo dnf install dist/mx-detective-0.1.0-1.fc44.x86_64.rpm
-```
-
-### Debian / Ubuntu (`.deb`)
-```bash
-sudo dpkg -i dist/mx-detective_0.1.0_amd64.deb
-```
-
-### Arch Linux (`.pkg.tar.zst` or PKGBUILD)
-```bash
-# Direct binary package installation
-sudo pacman -U dist/mx-detective-0.1.0-1-x86_64.pkg.tar.zst
-
-# Or build from PKGBUILD:
-cd packaging/arch && makepkg -si
-```
-
-### macOS (Apple Silicon & Intel)
-```bash
-# Apple Silicon (M1/M2/M3/M4)
-tar -xvf dist/mx-detective-v0.1.0-macos-aarch64.tar.gz
-./mx-detective-macos-aarch64/mx-detective --gui
-
-# Intel (x86_64)
-tar -xvf dist/mx-detective-v0.1.0-macos-x86_64.tar.gz
-./mx-detective-macos-x86_64/mx-detective --gui
-```
-
-### Windows (64-bit)
-1. Download `mx-detective-v0.1.0-windows-x86_64.zip`.
-2. Extract the archive.
-3. Double-click `mx-detective.exe` to launch the GUI, or run via PowerShell:
 ```powershell
-.\mx-detective.exe example.com
+irm https://raw.githubusercontent.com/mottipython/mx-detective/master/install.ps1 | iex
 ```
 
-### Standalone Linux Tarball
+Or just download the single `.exe` and run it, nothing installed:
+
+```powershell
+irm https://github.com/mottipython/mx-detective/releases/download/v1.0.0/mx-detective-windows-x86_64.exe -OutFile mx-detective.exe; .\mx-detective.exe example.com
+```
+
+**Linux and macOS.** Installs to `~/.local/bin` (or `/usr/local/bin` as root) after checking the checksum. Run the same line again to update.
+
 ```bash
-tar -xvf dist/mx-detective-v0.1.0-linux-x86_64.tar.gz
-cd mx-detective-linux-x86_64
-./mx-detective --help
+curl -fsSL https://raw.githubusercontent.com/mottipython/mx-detective/master/install.sh | sh
 ```
 
-### Build from Source
+**Linux packages** for v1.0.0:
+
 ```bash
-cargo build --release
-./target/release/mx-detective --help
+# Debian, Ubuntu
+curl -fLO https://github.com/mottipython/mx-detective/releases/download/v1.0.0/mx-detective_1.0.0_amd64.deb && sudo apt install ./mx-detective_1.0.0_amd64.deb
+
+# Fedora, RHEL, Rocky
+sudo dnf install https://github.com/mottipython/mx-detective/releases/download/v1.0.0/mx-detective-1.0.0-1.x86_64.rpm
+
+# Arch
+curl -fLO https://github.com/mottipython/mx-detective/releases/download/v1.0.0/mx-detective-1.0.0-1-x86_64.pkg.tar.zst && sudo pacman -U mx-detective-1.0.0-1-x86_64.pkg.tar.zst
 ```
 
----
+**A specific version** (for example to keep a fleet on one release):
 
-## 💻 CLI Usage & Examples
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/mottipython/mx-detective/master/install.ps1))) -Version v1.0.0
+```
 
-### Basic Domain Diagnostic
 ```bash
-mx-detective google.com
+curl -fsSL https://raw.githubusercontent.com/mottipython/mx-detective/master/install.sh | MX_DETECTIVE_VERSION=v1.0.0 sh
 ```
 
-### Direct Connection to Specific MX Host
+**Check it worked:** `mx-detective --version`. **Uninstall:** delete `mx-detective.exe` from `%LOCALAPPDATA%\Programs\mx-detective` (Windows) or `mx-detective` from `~/.local/bin`; packages are removed with your package manager.
+<!-- install:end -->
+
+## Usage
+
 ```bash
-mx-detective example.com --host mail.example.com --port 25
+mx-detective example.com                         # test every MX server of the domain
+mx-detective example.com --primary-only          # only the most preferred MX host
+mx-detective example.com --host mail.example.com # test one specific server
+mx-detective example.com --recipient me@example.com   # is this mailbox accepted?
+mx-detective example.com --dkim-selector mysel1,mysel2
+mx-detective example.com -o report.html          # also .md .json .csv .txt
+mx-detective --gui                               # open the window
 ```
 
-### Test Recipient Mailbox Acceptance
+`mx-detective --help` explains every option, the exit codes and the keys below, with examples.
+
+## Scripting and automation
+
+Built to be called from scripts, RMM tools such as NinjaOne, and CI jobs. There are no prompts, nothing is installed or changed on the machine, and what a script reads is stable.
+
+**Ask for what you need**
+
+| Option | Output on stdout |
+|---|---|
+| *(none)* | the full text report |
+| `--summary` | one `key=value` line per fact (keys below) |
+| `--get KEY` | only the value of one key, for example `--get grade` prints `A` |
+| `--json` | the complete result as JSON |
+
+`-o FILE` additionally saves a report; the format follows the extension (`.html` `.md` `.json` `.csv` `.txt`).
+
+Output on stdout is plain ASCII whatever the console code page (JSON uses `\u` escapes), and progress goes to stderr, and only when stderr is a terminal. A script that captures both streams gets the answer and nothing else. `--quiet` hides progress on a terminal too. Colors appear only on a terminal and `NO_COLOR` turns them off.
+
+**Gate on the result**
+
+| Exit code | Meaning |
+|---|---|
+| `0` | finished, and nothing is at or above `--fail-on` (always `0` without `--fail-on`) |
+| `1` | finished, and at least one finding is at or above `--fail-on critical\|warning\|notice` |
+| `2` | command line error |
+| `3` | could not finish: `--max-time` (default 300 seconds, `0` for no limit) ran out, or a report file could not be written |
+
+A domain that cannot receive mail is an answer, not an error: it shows up as a Critical finding, so use `--fail-on critical`.
+
+**PowerShell**
+
+```powershell
+$grade = mx-detective.exe example.com --get grade
+$r = mx-detective.exe example.com --json | ConvertFrom-Json
+"$($r.domain): grade $($r.grade), score $($r.score)/100"
+
+mx-detective.exe example.com --fail-on warning --quiet
+if ($LASTEXITCODE -eq 1) { Write-Output 'mail setup needs attention' }
+
+# a script host that stores custom fields, one value each
+$expires = mx-detective.exe example.com --get cert_days_left
+```
+
+**sh**
+
 ```bash
-mx-detective example.com --recipient admin@example.com
+mx-detective example.com --fail-on critical --quiet || echo "critical mail problem"
+grade=$(mx-detective example.com --get grade)
+mx-detective example.com --summary | grep ^cert_days_left=
 ```
 
-### Export Reports in Different Formats
-```bash
-# Export interactive HTML report
-mx-detective example.com --export report.html
+**Keys for `--summary` and `--get`.** Values never contain spaces or newlines; an empty value means not applicable or not measured.
 
-# Export Markdown report for a GitHub/Jira issue
-mx-detective example.com --export report.md
+| Key | Meaning |
+|---|---|
+| `domain` | the domain that was checked |
+| `tool_version` | version of mx-detective that produced the result |
+| `score` | health score, 0-100 |
+| `grade` | letter grade: A+, A, B, C, D or F |
+| `critical` | number of Critical findings |
+| `warning` | number of Warning findings |
+| `notice` | number of Notice findings |
+| `pass` | number of checks that passed |
+| `critical_ids` | comma-separated IDs of the Critical findings |
+| `warning_ids` | comma-separated IDs of the Warning findings |
+| `mx_hosts` | number of MX hosts the domain publishes |
+| `servers_tested` | number of server addresses tested |
+| `starttls_servers` | number of servers that offer STARTTLS |
+| `open_relay` | true if any server accepted a relay test |
+| `port25` | open, closed or untested |
+| `spf` | present or missing |
+| `spf_lookups` | DNS lookups the SPF record needs, of 10 allowed |
+| `dmarc_policy` | none, quarantine, reject or missing |
+| `dkim_keys` | number of active DKIM keys found under common selectors |
+| `mta_sts` | enforce, testing, none or missing |
+| `dane` | true if any MX host publishes TLSA records |
+| `dnssec` | signed, unsigned or unknown |
+| `blocklisted` | number of blocklist listings for the MX addresses |
 
-# Export CSV for spreadsheet review
-mx-detective example.com --export report.csv
+In `--json`, `tool_version` identifies the build and the field names are kept stable within a major version.
 
-# Output JSON to stdout or file
-mx-detective example.com --json > report.json
-```
+## What it checks
 
----
+**Every MX address, in parallel.** Up to four IPv4 and four IPv6 addresses per MX host. Identical findings across servers are merged ("all 10 servers"), and servers behind one name that behave differently are flagged.
 
-## 🖥️ Graphical Interface (GUI)
+**SMTP behavior**
+- Greeting delay (tarpit), banner FQDN, CRLF line endings, multiline reply format
+- `EHLO` / `HELO` fallback, advertised `SIZE`, `PIPELINING`, `CHUNKING`, `SMTPUTF8`
+- `AUTH` offered before TLS
+- Null sender (`MAIL FROM:<>`) accepted, as RFC 5321 requires
+- `postmaster@` accepted, unknown recipients rejected at `RCPT` time (backscatter and catch-all), greylisting
+- Open relay (never sends a message; always `RSET`)
+- `VRFY` / `EXPN` exposure, `RSET` and `QUIT` behavior
+- Optional mailbox probe with `--recipient`
 
-Launch the native desktop GUI by adding `--gui`:
-```bash
-mx-detective --gui
-# or pass a domain directly:
-mx-detective google.com --gui
-```
+**TLS** (from the certificate and session the server actually presents)
+- Protocol version and cipher, certificate subject, issuer, SANs, expiry, chain trust and hostname match
+- `STARTTLS` advertised but failing, plaintext data injected after the `220` reply, re-`EHLO` after TLS
+- DANE: TLSA records matched against the presented chain; DNSSEC status of the records
+- MTA-STS: TXT record, policy file, mode, `max_age`, MX patterns against the real MX hosts, and whether TLS would actually pass in enforce mode
+- TLS-RPT
 
-### GUI Features:
-- **Interactive Top Bar**: Real-time domain and MX override inputs.
-- **Theme Switcher**: Instant switching between 🌙 Dark, ☀️ Light, and 🖥 System theme.
-- **Score Header**: Circular health score (0-100) and letter grade (A+ to F).
-- **5 Comprehensive Tabs**:
-  1. **📋 Overview & Findings**: Issues prioritized by severity with actionable remediation steps.
-  2. **⚡ SMTP Behavior & Anomalies**: Detected RFC violations, banner latency, tarpit detection, and ESMTP chips.
-  3. **🌐 DNS & Reverse DNS**: MX priority table, PTR resolution, SPF mechanisms, and DMARC configuration.
-  4. **🔌 Port Reachability**: Latency table for ports 25, 587, 465, and 2525.
-  5. **📜 Raw Transcript**: Microsecond-stamped sent (`->`) and received (`<-`) SMTP packet stream with one-click clipboard copying.
-- **One-Click Export**: Save reports directly as HTML, Markdown, CSV, JSON, or Text from the UI.
+**DNS and mail authentication**
+- MX list, null MX, MX pointing at a CNAME, A and AAAA records, PTR and forward-confirmed reverse DNS
+- SPF with the full include/redirect tree counted against the 10-lookup limit, void lookups, `ptr`, `all`
+- DMARC policy, `pct`, `sp`, alignment, and whether external `rua`/`ruf` addresses have authorized reports
+- DKIM: about 95 common selectors tried in parallel, key type and size, revoked keys, wildcard records; add your own with `--dkim-selector`
+- DNSSEC, BIMI
+- DNS blocklists (Spamhaus, Barracuda, SpamCop, PSBL) for every MX address
 
----
+**Network**: ports 25, 587, 465 and 2525, and whether outbound port 25 looks blocked.
 
-## 🔒 Security & Code Audit (Snyk Tested)
+Findings are Critical, Warning, Notice, Info or Pass and roll up into a score and grade.
 
-MX Detective is continuously scanned for static code vulnerabilities, memory safety flaws, and supply chain issues using **Snyk CLI** (Static Application Security Testing / SAST):
+## Window
 
-```text
-Testing /mnt/wd2tb/projects/mx-detective ...
+`mx-detective --gui`, or double-click `mx-detective.exe` on Windows. Tabs: findings, SMTP behavior, servers and TLS (one row per address), DNS, ports, and the raw transcript of any server's session. Light and dark themes; export from the menu.
 
-╭──────────────────────────────────────────────────────────╮
-│ Test Summary                                             │
-│                                                          │
-│   Organization:      motti                               │
-│   Test type:         Static code analysis (SAST)         │
-│   Project path:      /mnt/wd2tb/projects/mx-detective    │
-│                                                          │
-│   Total issues:   0                                      │
-╰──────────────────────────────────────────────────────────╯
+It works without a graphics driver: it uses OpenGL when the machine has it and switches to a built-in software renderer in remote desktop sessions, virtual machines and fresh installs. If the window cannot open at all, the command line still works.
 
-✔ Tested 100% of codebase against known vulnerabilities
-✔ Zero security vulnerabilities detected
-```
+## Notes
 
----
+- Outbound port 25 is blocked on most home and cloud networks. The tool says so (`port25=closed`); mail to the domain may still work fine.
+- The Spamhaus lists refuse queries from public or busy resolvers. Those lists are reported as "could not be checked", not as clean.
+- DNSSEC status needs a validating resolver. If none answers, the result is "unknown", not "unsigned".
+- Only probe servers you are responsible for or have permission to test. Everything the tool sends is a normal SMTP command; it never sends `DATA`.
 
-## 🛡️ Fuzz Testing & Parser Hardening
+## Security
 
-Public mail servers frequently return non-standard, truncated, or hostile responses. To ensure MX Detective never crashes, hangs, or panics in production, the core protocol parsers were hardened against common attack vectors and validated through a high-throughput fuzz testing suite ([`tests/fuzz_tests.rs`](tests/fuzz_tests.rs)) running **over 100,000 randomized iterations**:
+See [SECURITY.md](SECURITY.md) for how to report a problem and how the project is checked (CI, `cargo audit`, Snyk, fuzzing, Dependabot).
 
-### Hardening Highlights
+## License
 
-- **RFC 1035 Compression Pointer Loop Defense**: Standard DNS compression pointers (`0xC0`) can be weaponized into cyclic references ($A \rightarrow A$ or $A \rightarrow B \rightarrow A$) that cause unbounded CPU loops. MX Detective enforces a strict `MAX_POINTER_JUMPS = 16` depth ceiling and traversal step bound, aborting safely with an error upon loop detection.
-- **Panic-Free UTF-8 Byte Validation**: RFC 5321 status codes are verified directly at the byte level (`parse_smtp_status_code`). Multi-byte UTF-8 prefixes (e.g. `€50`, `🚀50`, `漢50`) in server banners or multiline replies will never trigger Rust string slicing boundary panics.
-- **Safe Buffer Bounds & Truncation Checks**: Validated all pointer offsets (`ptr_offset < buf.len()`), question/answer offsets (`offset + 10 <= buf.len()`), and label lengths against packet boundaries.
-- **Lossy International Character Fallback**: Uses `String::from_utf8_lossy` for DNS labels to preserve stability when querying domains with unusual or corrupted international encodings.
-- **RFC 5321 Multiline EHLO Normalization**: Strips status code continuation prefixes (`250-STARTTLS` → `STARTTLS`, `250-SIZE` → `SIZE`) to guarantee correct capability detection.
-
-### Fuzz Test Results (100% Passing)
-
-| Test Suite | Target Parsers | Fuzzing Vectors | Iterations | Status |
-|:---|:---|:---|:---:|:---:|
-| `test_fuzz_dns_random_bytes` | `parse_mx`, `parse_a`, `parse_txt`, `parse_ptr`, `skip_name`, `read_name` | Raw randomized byte slices ($0$ to $1024$ bytes) | **100,000** | ✅ **0 Panics** |
-| `test_fuzz_dns_compression_pointer_loops` | `read_name`, `skip_name` | Self-loops, mutual 2-step loops, 50-pointer chains, truncated buffers | Handcrafted | ✅ **0 Panics** |
-| `test_fuzz_dns_mutated_packets` | DNS response decoders | Bit flips, byte overwrites (`0x00`, `0xC0`, `0xFF`), byte insertions | **50,000** | ✅ **0 Panics** |
-| `test_fuzz_dns_record_parsers` | `parse_dmarc_tags`, `parse_spf_mechanisms`, `build_dns_query_packet` | Arbitrary unicode, invalid delimiters, null bytes, labels $> 63$ chars | **25,000** | ✅ **0 Panics** |
-| `test_fuzz_smtp_status_code_parser` | `parse_smtp_status_code` | Multi-byte UTF-8 prefixes (`€`, `🚀`, `漢`, `é`), null bytes, partial lengths | **100,000** | ✅ **0 Panics** |
-| `test_fuzz_smtp_capability_extractor` | `extract_ehlo_capability` | Multiline prefixes (`250-`, `250 `), whitespace, emojis | **50,000** | ✅ **0 Panics** |
-| `test_fuzz_smtp_ehlo_extensions_parser` | `parse_ehlo_extensions` | Malformed `SIZE` numbers ($> 2^{64}-1$, negative, text), massive `AUTH` lines | **50,000** | ✅ **0 Panics** |
-| `test_fuzz_score_calculation` | `calculate_score` | Randomized severity combinations, verifying $[0, 100]$ score bounds | **20,000** | ✅ **0 Panics** |
-| `test_fuzz_reporter_all_formats` | `to_json`, `to_text`, `to_markdown`, `to_csv`, `to_html` | Extreme floats (`NaN`, `±Inf`, `-0.0`), `<script>` injections, CSV quotes | **1,000** | ✅ **0 Panics** |
-
-Run the fuzzing suite locally:
-```bash
-cargo test --test fuzz_tests
-```
-
----
-
-## 📦 Multi-Platform Release Matrix (OSX / Windows / Linux / Arch / RPM / DEB)
-
-The repository includes a production-ready GitHub Actions matrix workflow at `.github/workflows/release.yml`:
-- **Linux**: Automates `.rpm` (Fedora/RHEL), `.deb` (Debian/Ubuntu), Arch (`.pkg.tar.zst`), and `.tar.gz` releases.
-- **macOS (OSX)**: Native builds for both **Apple Silicon** (`aarch64-apple-darwin`) and **Intel** (`x86_64-apple-darwin`).
-- **Windows**: Native 64-bit build (`x86_64-pc-windows-msvc` / `x86_64-pc-windows-gnu`) packaged as `.zip` containing `mx-detective.exe`.
-
-To package all distributions locally:
-```bash
-./build-packages.sh
-```
-
----
-
-## 📜 License
-MIT License. Created by Motti Schleider.
+MIT. Created by Motti Schleider.
