@@ -19,14 +19,19 @@ clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wayland", "x11"] }
+eframe = { version = "0.34", default-features = false, features = ["default_fonts"] }
 egui_software_backend = "0.0.3"
-egui_backend_selector = { version = "0.0.2", default-features = false, features = ["glow"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "1"
 x509-parser = "0.18"
 sha2 = "0.10"
 rfd = "0.15"
+
+# The window picks OpenGL or a CPU renderer at run time on Linux and macOS. On Windows it
+# always renders on the CPU, so the selector (and its OpenGL probe) is left out.
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wayland", "x11"] }
+egui_backend_selector = { version = "0.0.2", default-features = false, features = ["glow"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }

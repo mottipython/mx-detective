@@ -81,8 +81,9 @@ NOTES
   - DNSSEC needs a validating resolver; without one, dnssec=unknown.
   - Only test servers you are responsible for, or have permission to test.
   - Colors appear only on a terminal. Set NO_COLOR to turn them off.
-  - The window picks its renderer by itself (OpenGL, or a built-in software renderer on remote
-    desktop and virtual machines). Set MX_DETECTIVE_SOFTWARE_RENDER=1 to force the software one.
+  - The window needs no graphics driver: on Windows it always draws on the CPU; on Linux and
+    macOS it uses OpenGL when that works. MX_DETECTIVE_SOFTWARE_RENDER=1 forces the CPU
+    renderer there.
   - With no domain, a double-click on Windows opens the window. Use --gui to open the
     window anywhere.";
 
