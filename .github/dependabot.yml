@@ -5,6 +5,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # The window pins egui through egui_backend_selector; they must move together.
+      - dependency-name: "eframe"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "egui*"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
