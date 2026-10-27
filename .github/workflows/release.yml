@@ -106,7 +106,7 @@ jobs:
           cd arch_build && tar --use-compress-program="zstd -19 -T0" -cf ../dist/mx-detective-${VERSION}-1-x86_64.pkg.tar.zst .PKGINFO usr/
 
       - name: Upload Linux Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: |
@@ -141,7 +141,7 @@ jobs:
           tar -czvf dist/mx-detective-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release mx-detective
 
       - name: Upload macOS Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -164,7 +164,7 @@ jobs:
         run: packaging\windows\build-installer.ps1
 
       - name: Upload Windows Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-x86_64
           path: dist/*.exe
