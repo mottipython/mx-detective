@@ -21,6 +21,8 @@ $out = & "$dir\mx-detective.exe" --version
 if ($LASTEXITCODE -or $out -notmatch [regex]::Escape($version)) { throw "installed exe reports '$out', expected $version" }
 if ((& $userPath) -notlike "*$dir*") { throw 'PATH was not updated' }
 
+Start-Process "$dir\mx-detective.exe" -ArgumentList '--gui' -PassThru   # uninstall must cope with the window open
+Start-Sleep 3
 Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT' -Wait
 if (Test-Path "$dir\mx-detective.exe") { throw 'uninstall left the exe behind' }
 if ((& $userPath) -ne $before) { throw 'uninstall did not restore PATH' }

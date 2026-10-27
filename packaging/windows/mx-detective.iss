@@ -75,3 +75,11 @@ begin
   Path := Copy(Path, 2, Length(Path) - 2);
   RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Path);
 end;
+
+function InitializeUninstall: Boolean;
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM mx-detective.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := True;
+end;
