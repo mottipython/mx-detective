@@ -1,4 +1,4 @@
-%{!?pkg_version:%global pkg_version 1.1.1}
+%{!?pkg_version:%global pkg_version 1.2.0}
 Name:           mx-detective
 Version:        %{pkg_version}
 Release:        1%{?dist}
@@ -24,6 +24,8 @@ install -m 0644 %{_sourcedir}/mx-detective.desktop $RPM_BUILD_ROOT%{_datadir}/ap
 %{_datadir}/applications/mx-detective.desktop
 
 %changelog
+* Tue Oct 27 2026 Motti Schleider <motti.schleider@gmail.com> - 1.2.0-1
+- Windows setup installer with Start menu entry, optional PATH and uninstaller
 * Tue Oct 27 2026 Motti Schleider <motti.schleider@gmail.com> - 1.1.1-1
 - Window exports include the changes since the baseline
 * Mon Oct 26 2026 Motti Schleider <motti.schleider@gmail.com> - 1.1.0-1

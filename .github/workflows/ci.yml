@@ -47,3 +47,8 @@ jobs:
       - run: cargo build --release
       - run: packaging\windows\build-installer.ps1
         shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/mx-detective-setup-windows-x86_64.exe
+          retention-days: 3

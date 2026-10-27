@@ -1,6 +1,6 @@
 # Maintainer: Motti Schleider <motti.schleider@gmail.com>
 pkgname=mx-detective
-pkgver=1.1.1
+pkgver=1.2.0
 pkgrel=1
 pkgdesc="Public MX server, SMTP handshake and mail security diagnostic tool"
 arch=('x86_64')
