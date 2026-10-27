@@ -20,7 +20,9 @@ trap 'rm -f "$block"' EXIT
 cat > "$block" <<BLOCK
 Latest release: **${tag}**, see the [release page](https://github.com/${repo}/releases/tag/${tag}) for notes and checksums. This section is regenerated on every release.
 
-**Windows** (PowerShell). Installs the portable executable for your user and adds it to your PATH. No administrator rights needed. Run the same line again to update.
+**Windows installer.** Download [mx-detective-setup-windows-x86_64.exe](${download}/mx-detective-setup-windows-x86_64.exe) and run it: a Start menu entry for the window, an optional PATH entry, and an uninstaller in Settings. It installs for your user, no administrator rights needed. For scripts and RMM tools add \`/VERYSILENT\`.
+
+**Windows** (PowerShell). Installs the portable executable for your user and adds it to your PATH, without an installer. Run the same line again to update.
 
 \`\`\`powershell
 irm ${raw}/install.ps1 | iex
@@ -61,7 +63,7 @@ curl -fLO ${download}/mx-detective-${version}-1-x86_64.pkg.tar.zst && sudo pacma
 curl -fsSL ${raw}/install.sh | MX_DETECTIVE_VERSION=${tag} sh
 \`\`\`
 
-**Check it worked:** \`mx-detective --version\`. **Uninstall:** delete \`mx-detective.exe\` from \`%LOCALAPPDATA%\\Programs\\mx-detective\` (Windows) or \`mx-detective\` from \`~/.local/bin\`; packages are removed with your package manager.
+**Check it worked:** \`mx-detective --version\`. **Uninstall:** Settings > Apps for the installer, or delete \`mx-detective.exe\` from \`%LOCALAPPDATA%\\Programs\\mx-detective\` (Windows) or \`mx-detective\` from \`~/.local/bin\`; packages are removed with your package manager.
 BLOCK
 
 {
