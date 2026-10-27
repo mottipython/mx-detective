@@ -13,9 +13,11 @@ Checks a domain's mail setup from the outside: it finds every MX server, connect
 ## Install
 
 <!-- install:start -->
-Latest release: **v1.1.1**, see the [release page](https://github.com/mottipython/mx-detective/releases/tag/v1.1.1) for notes and checksums. This section is regenerated on every release.
+Latest release: **v1.2.0**, see the [release page](https://github.com/mottipython/mx-detective/releases/tag/v1.2.0) for notes and checksums. This section is regenerated on every release.
 
-**Windows** (PowerShell). Installs the portable executable for your user and adds it to your PATH. No administrator rights needed. Run the same line again to update.
+**Windows installer.** Download [mx-detective-setup-windows-x86_64.exe](https://github.com/mottipython/mx-detective/releases/download/v1.2.0/mx-detective-setup-windows-x86_64.exe) and run it: a Start menu entry for the window, an optional PATH entry, and an uninstaller in Settings. It installs for your user, no administrator rights needed. For scripts and RMM tools add `/VERYSILENT`.
+
+**Windows** (PowerShell). Installs the portable executable for your user and adds it to your PATH, without an installer. Run the same line again to update.
 
 ```powershell
 irm https://raw.githubusercontent.com/mottipython/mx-detective/master/install.ps1 | iex
@@ -24,7 +26,7 @@ irm https://raw.githubusercontent.com/mottipython/mx-detective/master/install.ps
 Or just download the single `.exe` and run it, nothing installed:
 
 ```powershell
-irm https://github.com/mottipython/mx-detective/releases/download/v1.1.1/mx-detective-windows-x86_64.exe -OutFile mx-detective.exe; .\mx-detective.exe example.com
+irm https://github.com/mottipython/mx-detective/releases/download/v1.2.0/mx-detective-windows-x86_64.exe -OutFile mx-detective.exe; .\mx-detective.exe example.com
 ```
 
 **Linux and macOS.** Installs to `~/.local/bin` (or `/usr/local/bin` as root) after checking the checksum. Run the same line again to update.
@@ -33,30 +35,30 @@ irm https://github.com/mottipython/mx-detective/releases/download/v1.1.1/mx-dete
 curl -fsSL https://raw.githubusercontent.com/mottipython/mx-detective/master/install.sh | sh
 ```
 
-**Linux packages** for v1.1.1:
+**Linux packages** for v1.2.0:
 
 ```bash
 # Debian, Ubuntu
-curl -fLO https://github.com/mottipython/mx-detective/releases/download/v1.1.1/mx-detective_1.1.1_amd64.deb && sudo apt install ./mx-detective_1.1.1_amd64.deb
+curl -fLO https://github.com/mottipython/mx-detective/releases/download/v1.2.0/mx-detective_1.2.0_amd64.deb && sudo apt install ./mx-detective_1.2.0_amd64.deb
 
 # Fedora, RHEL, Rocky
-sudo dnf install https://github.com/mottipython/mx-detective/releases/download/v1.1.1/mx-detective-1.1.1-1.x86_64.rpm
+sudo dnf install https://github.com/mottipython/mx-detective/releases/download/v1.2.0/mx-detective-1.2.0-1.x86_64.rpm
 
 # Arch
-curl -fLO https://github.com/mottipython/mx-detective/releases/download/v1.1.1/mx-detective-1.1.1-1-x86_64.pkg.tar.zst && sudo pacman -U mx-detective-1.1.1-1-x86_64.pkg.tar.zst
+curl -fLO https://github.com/mottipython/mx-detective/releases/download/v1.2.0/mx-detective-1.2.0-1-x86_64.pkg.tar.zst && sudo pacman -U mx-detective-1.2.0-1-x86_64.pkg.tar.zst
 ```
 
 **A specific version** (for example to keep a fleet on one release):
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/mottipython/mx-detective/master/install.ps1))) -Version v1.1.1
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/mottipython/mx-detective/master/install.ps1))) -Version v1.2.0
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mottipython/mx-detective/master/install.sh | MX_DETECTIVE_VERSION=v1.1.1 sh
+curl -fsSL https://raw.githubusercontent.com/mottipython/mx-detective/master/install.sh | MX_DETECTIVE_VERSION=v1.2.0 sh
 ```
 
-**Check it worked:** `mx-detective --version`. **Uninstall:** delete `mx-detective.exe` from `%LOCALAPPDATA%\Programs\mx-detective` (Windows) or `mx-detective` from `~/.local/bin`; packages are removed with your package manager.
+**Check it worked:** `mx-detective --version`. **Uninstall:** Settings > Apps for the installer, or delete `mx-detective.exe` from `%LOCALAPPDATA%\Programs\mx-detective` (Windows) or `mx-detective` from `~/.local/bin`; packages are removed with your package manager.
 <!-- install:end -->
 
 ## Usage
