@@ -1,6 +1,6 @@
 [package]
 name = "mx-detective"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 authors = ["Motti Schleider <motti.schleider@gmail.com>"]
 description = "A diagnostic tool for probing public MX servers, testing connectivity issues, and detecting non-compliant or misbehaving SMTP responses."

@@ -1,4 +1,4 @@
-%{!?pkg_version:%global pkg_version 1.1.0}
+%{!?pkg_version:%global pkg_version 1.1.1}
 Name:           mx-detective
 Version:        %{pkg_version}
 Release:        1%{?dist}
@@ -24,6 +24,8 @@ install -m 0644 %{_sourcedir}/mx-detective.desktop $RPM_BUILD_ROOT%{_datadir}/ap
 %{_datadir}/applications/mx-detective.desktop
 
 %changelog
+* Tue Oct 27 2026 Motti Schleider <motti.schleider@gmail.com> - 1.1.1-1
+- Window exports include the changes since the baseline
 * Mon Oct 26 2026 Motti Schleider <motti.schleider@gmail.com> - 1.1.0-1
 - Compare a run with an earlier result: --baseline, --diff, --fail-on regression
 * Mon Oct 26 2026 Motti Schleider <motti.schleider@gmail.com> - 1.0.0-1
