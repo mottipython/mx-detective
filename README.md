@@ -115,6 +115,8 @@ if ($LASTEXITCODE -eq 1) { Write-Output 'mail setup needs attention' }
 $expires = mx-detective.exe example.com --get cert_days_left
 ```
 
+A complete example that scans, prints facts and findings, compares with the previous run and sets the exit code is in [`examples/Invoke-MxHealthCheck.ps1`](examples/Invoke-MxHealthCheck.ps1) (Windows PowerShell 5.1 and PowerShell 7). Run it with `-SelfTest` to check that mx-detective behaves as documented; CI does this on every push.
+
 **sh**
 
 ```bash
