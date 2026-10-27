@@ -21,7 +21,7 @@ jobs:
       checks: write
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -34,7 +34,7 @@ jobs:
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: snyk/actions/setup@master
       - name: snyk code test
         if: env.SNYK_TOKEN != ''
@@ -52,7 +52,7 @@ jobs:
       matrix:
         target: [dns_packets, smtp_lines, http_and_policy, record_parsers, certificate_matching, baseline]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: System libraries
         run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev libwayland-dev libxkbcommon-dev clang
       - uses: dtolnay/rust-toolchain@nightly
