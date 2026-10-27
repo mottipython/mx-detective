@@ -3,6 +3,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 use crate::diagnose::{self, DiagnosticOptions};
+use crate::diff::{self, Diff, Kind, Trend};
 use crate::models::{DiagnosticResult, Severity};
 use crate::reporter::DiagnosticReporter;
 
@@ -21,6 +22,7 @@ enum AppTab {
     DnsRecords,
     Ports,
     Transcript,
+    Changes,
 }
 
 pub struct MxDetectiveApp {
@@ -42,6 +44,10 @@ pub struct MxDetectiveApp {
     last_exported_path: Option<String>,
     tx_export: Sender<Result<String, String>>,
     rx_export: Receiver<Result<String, String>>,
+    baseline: Option<DiagnosticResult>,
+    diff: Option<Diff>,
+    tx_baseline: Sender<Result<DiagnosticResult, String>>,
+    rx_baseline: Receiver<Result<DiagnosticResult, String>>,
 }
 
 enum DiagnosticMessage {
@@ -65,6 +71,7 @@ fn open_in_system(target: &str) {
 impl MxDetectiveApp {
     pub fn new(initial_domain: Option<String>) -> Self {
         let (tx_export, rx_export) = channel();
+        let (tx_baseline, rx_baseline) = channel();
         Self {
             domain_input: initial_domain.unwrap_or_else(|| "google.com".to_string()),
             host_override: String::new(),
@@ -84,6 +91,10 @@ impl MxDetectiveApp {
             last_exported_path: None,
             tx_export,
             rx_export,
+            baseline: None,
+            diff: None,
+            tx_baseline,
+            rx_baseline,
         }
     }
 
@@ -196,6 +207,29 @@ impl MxDetectiveApp {
         }
     }
 
+    /// Asks for an earlier `--json` result to compare the current one against.
+    fn pick_baseline(&self) {
+        let tx = self.tx_baseline.clone();
+        thread::spawn(move || {
+            let dialog = rfd::FileDialog::new()
+                .set_title("Compare with an earlier JSON result")
+                .add_filter("JSON", &["json"]);
+            if let Some(path) = dialog.pick_file() {
+                let _ = tx.send(diff::load_baseline(&path.to_string_lossy()));
+            }
+        });
+    }
+
+    fn refresh_diff(&mut self) {
+        self.diff = None;
+        if let (Some(old), Some(new)) = (&self.baseline, &self.result) {
+            match diff::compare(old, new, &[]) {
+                Ok(d) => self.diff = Some(d),
+                Err(e) => self.export_message = Some((true, format!("Cannot compare: {}", e))),
+            }
+        }
+    }
+
     fn run_diagnostic(&mut self) {
         if self.domain_input.trim().is_empty() {
             self.status_text = "Please enter a valid domain name.".to_string();
@@ -252,6 +286,7 @@ impl MxDetectiveApp {
             ThemeMode::System => {}
         }
 
+        let mut finished = false;
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
@@ -262,8 +297,24 @@ impl MxDetectiveApp {
                         self.status_text = format!("Diagnostic complete. Score: {}/100 ({})", res.score, res.grade);
                         self.result = Some(*res);
                         self.is_running = false;
+                        finished = true;
                     }
                 }
+            }
+        }
+        if finished {
+            self.refresh_diff();
+        }
+
+        while let Ok(msg) = self.rx_baseline.try_recv() {
+            match msg {
+                Ok(old) => {
+                    self.baseline = Some(old);
+                    self.export_message = None;
+                    self.refresh_diff();
+                    self.active_tab = AppTab::Changes;
+                }
+                Err(err) => self.export_message = Some((true, format!("Could not load the result: {}", err))),
             }
         }
 
@@ -368,6 +419,14 @@ impl MxDetectiveApp {
                         self.run_diagnostic();
                     }
 
+                    if ui
+                        .button("📂 Compare with…")
+                        .on_hover_text("Load an earlier --json result and show what changed since")
+                        .clicked()
+                    {
+                        self.pick_baseline();
+                    }
+
                     let export_enabled = self.result.is_some();
                     ui.add_enabled_ui(export_enabled, |ui| {
                         ui.menu_button(egui::RichText::new("💾 Export Report ▾").strong(), |ui| {
@@ -460,6 +519,11 @@ impl MxDetectiveApp {
                 ui.selectable_value(&mut self.active_tab, AppTab::DnsRecords, "🌐 DNS & Reverse DNS");
                 ui.selectable_value(&mut self.active_tab, AppTab::Ports, "🔌 Port Reachability");
                 ui.selectable_value(&mut self.active_tab, AppTab::Transcript, "📜 Raw Transcript");
+                let changes = match &self.diff {
+                    Some(d) => format!("🔀 Changes ({})", d.changes.len()),
+                    None => "🔀 Changes".to_string(),
+                };
+                ui.selectable_value(&mut self.active_tab, AppTab::Changes, changes);
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(res) = &self.result {
@@ -526,6 +590,9 @@ impl MxDetectiveApp {
                         }
                         AppTab::Transcript => {
                             self.render_transcript_tab(ui, res);
+                        }
+                        AppTab::Changes => {
+                            self.render_changes_tab(ui);
                         }
                     }
                 });
@@ -859,6 +926,42 @@ impl MxDetectiveApp {
                 });
             }
         }
+    }
+
+    fn render_changes_tab(&self, ui: &mut egui::Ui) {
+        let Some(d) = &self.diff else {
+            ui.label("Use 'Compare with…' to load an earlier JSON result (mx-detective --json) of this domain.");
+            return;
+        };
+        ui.heading(format!(
+            "Since {}: score {} ({}) → {} ({})",
+            d.baseline_timestamp, d.baseline_score, d.baseline_grade, d.score, d.grade
+        ));
+        ui.add_space(6.0);
+        if d.changes.is_empty() {
+            ui.label("Nothing changed.");
+            return;
+        }
+        egui::Grid::new("changes_grid")
+            .striped(true)
+            .min_col_width(80.0)
+            .show(ui, |ui| {
+                for c in &d.changes {
+                    let (text, color) = match c.trend {
+                        Trend::Worse => ("WORSE", egui::Color32::from_rgb(248, 113, 113)),
+                        Trend::Better => ("BETTER", egui::Color32::from_rgb(52, 211, 153)),
+                        Trend::Neutral => ("CHANGED", egui::Color32::from_rgb(148, 163, 184)),
+                    };
+                    ui.label(egui::RichText::new(text).strong().color(color));
+                    ui.label(&c.id);
+                    ui.label(match c.kind {
+                        Kind::Added => format!("new: {}", c.new),
+                        Kind::Removed => format!("was: {}", c.old),
+                        Kind::Changed => format!("{} → {}", c.old, c.new),
+                    });
+                    ui.end_row();
+                }
+            });
     }
 
     fn render_ports_tab(&self, ui: &mut egui::Ui, res: &DiagnosticResult) {
