@@ -1,4 +1,5 @@
 pub mod diagnose;
+pub mod diff;
 pub mod dns;
 pub mod gui;
 pub mod models;

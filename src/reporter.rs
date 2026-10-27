@@ -1,3 +1,4 @@
+use crate::diff::{Change, Diff, Kind, Trend};
 use crate::models::{DiagnosticResult, DnsReport, MisbehaviorAnomaly, Severity, SmtpReport};
 
 pub struct DiagnosticReporter;
@@ -198,10 +199,100 @@ fn counts(result: &DiagnosticResult) -> [usize; 4] {
     ]
 }
 
+/// One row per change: what happened, the ID, and the values.
+fn diff_rows(diff: &Diff) -> Vec<[String; 4]> {
+    let row = |c: &Change| {
+        let trend = match c.trend {
+            Trend::Worse => "WORSE",
+            Trend::Better => "BETTER",
+            Trend::Neutral => "",
+        };
+        let values = match c.kind {
+            Kind::Added => format!("new: {}", c.new),
+            Kind::Removed => format!("was: {}", c.old),
+            Kind::Changed => format!("{} -> {}", c.old, c.new),
+        };
+        [
+            trend.to_string(),
+            format!("{:?}", c.kind).to_lowercase(),
+            c.id.clone(),
+            values,
+        ]
+    };
+    diff.changes.iter().map(row).collect()
+}
+
+fn diff_heading(diff: &Diff) -> String {
+    format!(
+        "Changes since {}: score {} ({}) -> {} ({}), {} changes, {} worse, {} better",
+        diff.baseline_timestamp,
+        diff.baseline_score,
+        diff.baseline_grade,
+        diff.score,
+        diff.grade,
+        diff.changes.len(),
+        diff.count(Trend::Worse),
+        diff.count(Trend::Better)
+    )
+}
+
 impl DiagnosticReporter {
     pub fn to_json(result: &DiagnosticResult) -> String {
         // ASCII only (non-ASCII as \u escapes), so any console code page reads it correctly.
         escape_non_ascii(&serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    /// The result with the comparison added under a `diff` key.
+    pub fn to_json_with_diff(result: &DiagnosticResult, diff: &Diff) -> String {
+        let mut value = serde_json::to_value(result).unwrap_or_default();
+        value["diff"] = serde_json::to_value(diff).unwrap_or_default();
+        escape_non_ascii(&serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    pub fn diff_text(diff: &Diff) -> String {
+        let mut out = format!("{}\n", ascii_fold(&diff_heading(diff)));
+        for [trend, kind, id, values] in diff_rows(diff) {
+            out.push_str(&format!(
+                "  {:<7} {:<8} {}: {}\n",
+                trend,
+                kind,
+                ascii_fold(&id),
+                ascii_fold(&values)
+            ));
+        }
+        out
+    }
+
+    pub fn diff_markdown(diff: &Diff) -> String {
+        let mut md = format!("## {}\n\n", md_cell(&diff_heading(diff)));
+        if !diff.changes.is_empty() {
+            md.push_str("| | Change | ID | Values |\n|---|---|---|---|\n");
+        }
+        for [trend, kind, id, values] in diff_rows(diff) {
+            md.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                trend,
+                kind,
+                md_cell(&id),
+                md_cell(&values)
+            ));
+        }
+        md
+    }
+
+    pub fn diff_html(diff: &Diff) -> String {
+        let mut html = format!("<h2>{}</h2>\n<table>\n", html_escape(&diff_heading(diff)));
+        for [trend, kind, id, values] in diff_rows(diff) {
+            html.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                trend,
+                kind,
+                html_escape(&id),
+                html_escape(&values)
+            ));
+        }
+        html.push_str("</table>\n");
+        html
     }
 
     pub fn to_text(result: &DiagnosticResult) -> String {

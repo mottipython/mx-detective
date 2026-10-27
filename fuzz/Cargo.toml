@@ -42,3 +42,9 @@ name = "certificate_matching"
 path = "fuzz_targets/certificate_matching.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "baseline"
+path = "fuzz_targets/baseline.rs"
+test = false
+doc = false

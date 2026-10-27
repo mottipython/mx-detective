@@ -151,7 +151,31 @@ mx-detective example.com --summary | grep ^cert_days_left=
 | `dnssec` | signed, unsigned or unknown |
 | `blocklisted` | number of blocklist listings for the MX addresses |
 
+With `--baseline` or `--diff` (below) four more keys are added: `changes`, `regressions`, `improvements`, and `regression_ids` (comma-separated IDs of what got worse).
+
 In `--json`, `tool_version` identifies the build and the field names are kept stable within a major version.
+
+## Comparing with an earlier run
+
+Save a result, run again later, and see what changed. Good for drift alerts from a scheduled job, and for checking a DNS or mail migration before and after.
+
+```bash
+mx-detective example.com --json > last.json                      # the baseline
+mx-detective example.com --baseline last.json --fail-on regression  # later: what got worse?
+mx-detective --diff last.json now.json                           # compare two saved results, no network
+```
+
+A change is a finding that appeared, went away or changed severity, or a difference in the MX list, SPF, DMARC, DKIM keys, MTA-STS, blocklist listings, or any server's reachability, TLS version, cipher or certificate. Things that differ on every run (latency, days left on a certificate, wording) are ignored, and so are Pass and Info findings coming and going. A renewed certificate shows as one fingerprint change.
+
+- `--diff-only` prints just the changes; `--ignore ID,ID` drops changes whose ID starts with one of them.
+- `--fail-on regression` exits 1 if anything got worse than the baseline; the exit codes are otherwise unchanged. A baseline that cannot be read, or is for another domain, exits 2.
+- `--json` adds a `diff` object; `-o report.html` / `.md` get a changes section.
+
+```powershell
+$worse = mx-detective.exe example.com --baseline C:\ProgramData\mx\last.json --get regression_ids
+if ($worse) { Write-Output "mail setup got worse: $worse" }
+mx-detective.exe example.com --json | Set-Content C:\ProgramData\mx\last.json
+```
 
 ## What it checks
 

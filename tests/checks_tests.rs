@@ -258,3 +258,21 @@ fn text_report_and_json_are_pure_ascii() {
         "220 m\u{e9}l.example caf\u{e9} \u{1f600}"
     );
 }
+
+#[test]
+fn a_saved_json_result_loads_as_a_baseline() {
+    use mx_detective::diff::{compare, parse_baseline};
+    use mx_detective::models::DiagnosticResult;
+    use mx_detective::reporter::DiagnosticReporter;
+
+    let mut old = DiagnosticResult::new("example.com".into(), None);
+    old.checks = vec![CheckItem::new("SPF", "DNS", Severity::Notice, "t", "m")];
+    let mut new = old.clone();
+    new.checks[0].severity = Severity::Critical;
+
+    let loaded = parse_baseline(&DiagnosticReporter::to_json(&old)).unwrap();
+    let diff = compare(&loaded, &new, &[]).unwrap();
+    assert_eq!(diff.changes.len(), 1);
+    assert!(DiagnosticReporter::to_json_with_diff(&new, &diff).contains("\"diff\""));
+    assert!(parse_baseline("{\"not\": \"a result\"}").is_err());
+}

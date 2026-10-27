@@ -6,6 +6,7 @@ use clap::builder::PossibleValuesParser;
 use clap::{ArgGroup, CommandFactory, FromArgMatches, Parser, ValueEnum};
 
 use mx_detective::diagnose::{self, DiagnosticOptions};
+use mx_detective::diff::{self, Diff, Trend};
 use mx_detective::models::{DiagnosticResult, Severity};
 use mx_detective::reporter::DiagnosticReporter;
 use mx_detective::{gui, platform, summary};
@@ -64,6 +65,9 @@ EXAMPLES
   mx-detective example.com --fail-on critical --quiet || echo \"mail problem\"
   mx-detective example.com --json > result.json
   mx-detective example.com -o report.html
+  mx-detective example.com --json > last.json
+  mx-detective example.com --baseline last.json --fail-on regression
+  mx-detective --diff last.json now.json --get regression_ids
   mx-detective example.com --host mx1.example.com --recipient user@example.com
   mx-detective example.com --primary-only --no-dnsbl --timeout 3
 
@@ -92,6 +96,8 @@ enum FailOn {
     Critical,
     Warning,
     Notice,
+    /// Anything got worse than the baseline
+    Regression,
 }
 
 impl FailOn {
@@ -100,6 +106,7 @@ impl FailOn {
             FailOn::Notice => 1,
             FailOn::Warning => 2,
             FailOn::Critical => 3,
+            FailOn::Regression => u8::MAX,
         }
     }
 }
@@ -113,8 +120,11 @@ fn severity_rank(severity: Severity) -> u8 {
     }
 }
 
-fn exceeds(result: &DiagnosticResult, level: FailOn) -> bool {
-    result.checks.iter().any(|c| severity_rank(c.severity) >= level.rank())
+fn exceeds(result: &DiagnosticResult, diff: Option<&Diff>, level: FailOn) -> bool {
+    match level {
+        FailOn::Regression => diff.is_some_and(|d| d.count(Trend::Worse) > 0),
+        _ => result.checks.iter().any(|c| severity_rank(c.severity) >= level.rank()),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -138,13 +148,34 @@ impl Format {
         }
     }
 
-    fn render(self, result: &DiagnosticResult) -> String {
+    fn render(self, result: &DiagnosticResult, diff: Option<&Diff>) -> String {
+        let Some(d) = diff else {
+            return match self {
+                Format::Html => DiagnosticReporter::to_html(result),
+                Format::Json => DiagnosticReporter::to_json(result),
+                Format::Md => DiagnosticReporter::to_markdown(result),
+                Format::Csv => DiagnosticReporter::to_csv(result),
+                Format::Txt => DiagnosticReporter::to_text(result),
+            };
+        };
         match self {
-            Format::Html => DiagnosticReporter::to_html(result),
-            Format::Json => DiagnosticReporter::to_json(result),
-            Format::Md => DiagnosticReporter::to_markdown(result),
+            Format::Html => DiagnosticReporter::to_html(result).replacen(
+                "</body>",
+                &format!("{}</body>", DiagnosticReporter::diff_html(d)),
+                1,
+            ),
+            Format::Json => DiagnosticReporter::to_json_with_diff(result, d),
+            Format::Md => format!(
+                "{}\n{}",
+                DiagnosticReporter::diff_markdown(d),
+                DiagnosticReporter::to_markdown(result)
+            ),
             Format::Csv => DiagnosticReporter::to_csv(result),
-            Format::Txt => DiagnosticReporter::to_text(result),
+            Format::Txt => format!(
+                "{}\n{}",
+                DiagnosticReporter::diff_text(d),
+                DiagnosticReporter::to_text(result)
+            ),
         }
     }
 }
@@ -218,7 +249,7 @@ struct Cli {
     summary: bool,
 
     /// Print only the value of one summary key
-    #[arg(long, value_name = "KEY", value_parser = PossibleValuesParser::new(summary::KEYS.iter().map(|(k, _)| *k)), help_heading = "Output")]
+    #[arg(long, value_name = "KEY", value_parser = PossibleValuesParser::new(summary::KEYS.iter().chain(diff::KEYS).map(|(k, _)| *k)), help_heading = "Output")]
     get: Option<String>,
 
     /// Print the complete result as JSON
@@ -239,6 +270,22 @@ struct Cli {
     #[arg(long, value_enum, value_name = "FORMAT", help_heading = "Output")]
     format: Option<Format>,
 
+    /// Compare with an earlier --json result of the same domain and report what changed
+    #[arg(long, value_name = "FILE", help_heading = "Comparing")]
+    baseline: Option<String>,
+
+    /// Compare two saved --json results without testing anything
+    #[arg(long, num_args = 2, value_names = ["OLD", "NEW"], conflicts_with_all = ["domain", "baseline"], help_heading = "Comparing")]
+    diff: Option<Vec<String>>,
+
+    /// Print only the changes, not the whole report
+    #[arg(long, help_heading = "Comparing")]
+    diff_only: bool,
+
+    /// Leave out changes whose ID starts with one of these, comma-separated (case ignored)
+    #[arg(long, value_name = "LIST", help_heading = "Comparing")]
+    ignore: Option<String>,
+
     /// Exit with code 1 if any finding is at or above this level
     #[arg(long, value_enum, value_name = "LEVEL", help_heading = "Output")]
     fail_on: Option<FailOn>,
@@ -255,6 +302,7 @@ struct Cli {
 fn command() -> clap::Command {
     let keys: String = summary::KEYS
         .iter()
+        .chain(diff::KEYS)
         .map(|(k, d)| format!("  {:<20}{}\n", k, d))
         .collect();
     Cli::command().after_long_help(format!("{}{}{}", HELP_BODY, keys, HELP_EXAMPLES))
@@ -310,7 +358,73 @@ fn write_stdout(text: &str) {
     let _ = out.write_all(text.as_bytes()).and_then(|_| out.flush());
 }
 
+fn ignore_list(cli: &Cli) -> Vec<String> {
+    cli.ignore
+        .iter()
+        .flat_map(|list| list.split(','))
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
+fn usage_error(message: &str) -> ExitCode {
+    eprintln!("mx-detective: {}", message);
+    ExitCode::from(EXIT_USAGE)
+}
+
+/// Prints the answer, saves the `-o` report and turns the findings into the exit code.
+fn emit(cli: &Cli, term: &Term, result: &DiagnosticResult, diff: Option<&Diff>) -> ExitCode {
+    let diff_pairs = diff.map(Diff::pairs).unwrap_or_default();
+    if let Some(key) = &cli.get {
+        let value =
+            summary::get(result, key).or_else(|| diff_pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()));
+        write_stdout(&format!("{}\n", value.unwrap_or_default()));
+    } else if cli.summary {
+        let extra: String = diff_pairs.iter().map(|(k, v)| format!("{}={}\n", k, v)).collect();
+        write_stdout(&format!("{}{}", summary::to_text(result), extra));
+    } else if cli.json {
+        write_stdout(&format!("{}\n", Format::Json.render(result, diff)));
+    } else {
+        match diff {
+            Some(d) if cli.diff_only || cli.diff.is_some() => write_stdout(&DiagnosticReporter::diff_text(d)),
+            _ => write_stdout(&Format::Txt.render(result, diff)),
+        }
+    }
+
+    if let Some(path) = &cli.output {
+        let format = cli.format.unwrap_or_else(|| Format::from_path(path));
+        if let Err(e) = std::fs::write(path, format.render(result, diff)) {
+            eprintln!("mx-detective: cannot write {}: {}", path, e);
+            return ExitCode::from(EXIT_FAILED);
+        }
+        term.note(&format!("Report saved to {}", path));
+    }
+
+    match cli.fail_on {
+        Some(level) if exceeds(result, diff, level) => ExitCode::from(EXIT_FINDINGS),
+        _ => ExitCode::SUCCESS,
+    }
+}
+
+/// `--diff OLD NEW`: compare two saved results without testing anything.
+fn run_diff(cli: &Cli, files: &[String]) -> ExitCode {
+    let loaded: Result<Vec<_>, _> = files.iter().map(|f| diff::load_baseline(f)).collect();
+    let (old, new) = match loaded.as_deref() {
+        Ok([old, new]) => (old, new),
+        Ok(_) => return usage_error("--diff takes two files"),
+        Err(e) => return usage_error(e),
+    };
+    match diff::compare(old, new, &ignore_list(cli)) {
+        Ok(d) => emit(cli, &Term::new(cli.quiet), new, Some(&d)),
+        Err(e) => usage_error(&e),
+    }
+}
+
 fn run(cli: Cli, domain: String) -> ExitCode {
+    let baseline = match cli.baseline.as_deref().map(diff::load_baseline).transpose() {
+        Ok(baseline) => baseline,
+        Err(e) => return usage_error(&e),
+    };
     if cli.max_time > 0 {
         let limit = cli.max_time;
         std::thread::spawn(move || {
@@ -337,29 +451,12 @@ fn run(cli: Cli, domain: String) -> ExitCode {
         extended: !cli.no_extended,
     };
     let result = diagnose::run(&opts, &|message| term.step(message));
-
-    if let Some(key) = &cli.get {
-        write_stdout(&format!("{}\n", summary::get(&result, key).unwrap_or_default()));
-    } else if cli.summary {
-        write_stdout(&summary::to_text(&result));
-    } else if cli.json {
-        write_stdout(&format!("{}\n", DiagnosticReporter::to_json(&result)));
-    } else {
-        write_stdout(&DiagnosticReporter::to_text(&result));
-    }
-
-    if let Some(path) = &cli.output {
-        let format = cli.format.unwrap_or_else(|| Format::from_path(path));
-        if let Err(e) = std::fs::write(path, format.render(&result)) {
-            eprintln!("mx-detective: cannot write {}: {}", path, e);
-            return ExitCode::from(EXIT_FAILED);
-        }
-        term.note(&format!("Report saved to {}", path));
-    }
-
-    match cli.fail_on {
-        Some(level) if exceeds(&result, level) => ExitCode::from(EXIT_FINDINGS),
-        _ => ExitCode::SUCCESS,
+    match baseline
+        .map(|old| diff::compare(&old, &result, &ignore_list(&cli)))
+        .transpose()
+    {
+        Ok(d) => emit(&cli, &term, &result, d.as_ref()),
+        Err(e) => usage_error(&e),
     }
 }
 
@@ -398,6 +495,9 @@ fn main() -> ExitCode {
         Err(e) => e.exit(),
     };
 
+    if let Some(files) = &cli.diff {
+        return run_diff(&cli, files);
+    }
     match cli.domain.clone() {
         Some(domain) if !cli.gui => run(cli, domain),
         domain if cli.gui || launched_by_double_click() => open_window(domain),
@@ -425,19 +525,19 @@ mod tests {
     #[test]
     fn fail_on_levels() {
         let notice = result_with(&[Severity::Pass, Severity::Info, Severity::Notice]);
-        assert!(exceeds(&notice, FailOn::Notice));
-        assert!(!exceeds(&notice, FailOn::Warning));
+        assert!(exceeds(&notice, None, FailOn::Notice));
+        assert!(!exceeds(&notice, None, FailOn::Warning));
 
         let warning = result_with(&[Severity::Warning]);
-        assert!(exceeds(&warning, FailOn::Warning));
-        assert!(!exceeds(&warning, FailOn::Critical));
+        assert!(exceeds(&warning, None, FailOn::Warning));
+        assert!(!exceeds(&warning, None, FailOn::Critical));
 
         let critical = result_with(&[Severity::Critical]);
-        assert!(exceeds(&critical, FailOn::Critical));
+        assert!(exceeds(&critical, None, FailOn::Critical));
 
         let clean = result_with(&[Severity::Pass, Severity::Info]);
-        assert!(!exceeds(&clean, FailOn::Notice), "Info and Pass never fail a run");
-        assert!(!exceeds(&result_with(&[]), FailOn::Notice));
+        assert!(!exceeds(&clean, None, FailOn::Notice), "Info and Pass never fail a run");
+        assert!(!exceeds(&result_with(&[]), None, FailOn::Notice));
     }
 
     #[test]
