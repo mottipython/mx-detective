@@ -2,6 +2,14 @@
 
 Checks a domain's mail setup from the outside: it finds every MX server, connects to each address over IPv4 and IPv6, and reports what a sending server would run into. It has a command-line mode and a desktop window, and exports reports as HTML, Markdown, JSON, CSV or text.
 
+**[Download for Windows](https://github.com/mottipython/mx-detective/releases/latest/download/mx-detective-setup-windows-x86_64.exe)** · [Linux, macOS and other installs](#install) · [Scripting](#scripting-and-automation)
+
+- **Every server, both IP versions.** SMTP greeting, STARTTLS, certificate and cipher, open-relay probe and a recipient check, for each MX address.
+- **The whole mail setup.** SPF, DKIM, DMARC, MTA-STS, TLS-RPT, DNSSEC, DANE, reverse DNS and blocklists, scored as one grade.
+- **What changed since last time.** Compare a run with an earlier one and see what got better or worse; `--fail-on regression` makes it a gate.
+- **Built for scripts and RMM tools.** No prompts, stable `--get` and `--summary` keys, fixed exit codes, one portable exe.
+- **No graphics driver needed.** The window opens in VMs, remote desktops and fresh installs.
+
 [![CI](https://github.com/mottipython/mx-detective/actions/workflows/ci.yml/badge.svg)](https://github.com/mottipython/mx-detective/actions/workflows/ci.yml)
 [![Security](https://github.com/mottipython/mx-detective/actions/workflows/security.yml/badge.svg)](https://github.com/mottipython/mx-detective/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
