@@ -101,14 +101,7 @@ impl MxDetectiveApp {
     fn export_with_dialog(&self, res: &DiagnosticResult, ext: &'static str, filter_name: &'static str) {
         let domain = res.domain.clone();
         let default_name = format!("{}-report.{}", domain, ext);
-        let content = match ext {
-            "html" => DiagnosticReporter::to_html(res),
-            "md" => DiagnosticReporter::to_markdown(res),
-            "csv" => DiagnosticReporter::to_csv(res),
-            "json" => DiagnosticReporter::to_json(res),
-            "txt" => DiagnosticReporter::to_text(res),
-            _ => return,
-        };
+        let content = DiagnosticReporter::render(ext, res, self.diff.as_ref());
         let tx = self.tx_export.clone();
 
         thread::spawn(move || {
