@@ -242,6 +242,24 @@ impl DiagnosticReporter {
         escape_non_ascii(&serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string()))
     }
 
+    /// The report in the format named by `ext` (html, md, json, csv or txt), with the changes
+    /// since the baseline added where the format has room for them.
+    pub fn render(ext: &str, result: &DiagnosticResult, diff: Option<&Diff>) -> String {
+        match (ext, diff) {
+            ("html", Some(d)) => {
+                Self::to_html(result).replacen("</body>", &format!("{}</body>", Self::diff_html(d)), 1)
+            }
+            ("html", None) => Self::to_html(result),
+            ("json", Some(d)) => Self::to_json_with_diff(result, d),
+            ("json", None) => Self::to_json(result),
+            ("md", Some(d)) => format!("{}\n{}", Self::diff_markdown(d), Self::to_markdown(result)),
+            ("md", None) => Self::to_markdown(result),
+            ("csv", _) => Self::to_csv(result),
+            (_, Some(d)) => format!("{}\n{}", Self::diff_text(d), Self::to_text(result)),
+            (_, None) => Self::to_text(result),
+        }
+    }
+
     /// The result with the comparison added under a `diff` key.
     pub fn to_json_with_diff(result: &DiagnosticResult, diff: &Diff) -> String {
         let mut value = serde_json::to_value(result).unwrap_or_default();

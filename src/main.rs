@@ -149,34 +149,14 @@ impl Format {
     }
 
     fn render(self, result: &DiagnosticResult, diff: Option<&Diff>) -> String {
-        let Some(d) = diff else {
-            return match self {
-                Format::Html => DiagnosticReporter::to_html(result),
-                Format::Json => DiagnosticReporter::to_json(result),
-                Format::Md => DiagnosticReporter::to_markdown(result),
-                Format::Csv => DiagnosticReporter::to_csv(result),
-                Format::Txt => DiagnosticReporter::to_text(result),
-            };
+        let ext = match self {
+            Format::Html => "html",
+            Format::Json => "json",
+            Format::Md => "md",
+            Format::Csv => "csv",
+            Format::Txt => "txt",
         };
-        match self {
-            Format::Html => DiagnosticReporter::to_html(result).replacen(
-                "</body>",
-                &format!("{}</body>", DiagnosticReporter::diff_html(d)),
-                1,
-            ),
-            Format::Json => DiagnosticReporter::to_json_with_diff(result, d),
-            Format::Md => format!(
-                "{}\n{}",
-                DiagnosticReporter::diff_markdown(d),
-                DiagnosticReporter::to_markdown(result)
-            ),
-            Format::Csv => DiagnosticReporter::to_csv(result),
-            Format::Txt => format!(
-                "{}\n{}",
-                DiagnosticReporter::diff_text(d),
-                DiagnosticReporter::to_text(result)
-            ),
-        }
+        DiagnosticReporter::render(ext, result, diff)
     }
 }
 
