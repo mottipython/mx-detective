@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [dns_packets, smtp_lines, http_and_policy, record_parsers, certificate_matching]
+        target: [dns_packets, smtp_lines, http_and_policy, record_parsers, certificate_matching, baseline]
     steps:
       - uses: actions/checkout@v4
       - name: System libraries
