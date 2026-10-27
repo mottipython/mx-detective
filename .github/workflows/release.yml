@@ -159,11 +159,9 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-      - name: Name the portable executable
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp target/release/mx-detective.exe dist/mx-detective-windows-x86_64.exe
+      - name: Name the portable executable and build the installer
+        shell: pwsh
+        run: packaging\windows\build-installer.ps1
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4

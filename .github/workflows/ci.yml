@@ -36,3 +36,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
       - run: ${{ matrix.shell }} -NoProfile -File examples/Invoke-MxHealthCheck.ps1 -SelfTest -Exe target\release\mx-detective.exe
+
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - run: packaging\windows\build-installer.ps1
+        shell: pwsh
