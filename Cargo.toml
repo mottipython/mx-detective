@@ -25,7 +25,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "1"
 x509-parser = "0.18"
 sha2 = "0.10"
-rfd = "0.15"
+rfd = "0.17"
 
 # The window picks OpenGL or a CPU renderer at run time on Linux and macOS. On Windows it
 # always renders on the CPU, so the selector (and its OpenGL probe) is left out.
