@@ -23,6 +23,7 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let text = String::from_utf8_lossy(data);
-    let (a, b) = text.split_at(text.len() / 2);
+    let mid = (0..=text.len() / 2).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+    let (a, b) = text.split_at(mid);
     let _ = hostname_matches(a, b);
 });
